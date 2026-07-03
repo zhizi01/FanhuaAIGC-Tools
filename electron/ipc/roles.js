@@ -41,20 +41,16 @@ export function registerRolesIpc() {
     return readIndex(projectPath).items
   })
 
-  // 读取单个角色（结构化 meta + Markdown 设定）
+  // 读取单个角色（结构化 JSON meta）
   ipcMain.handle('roles:read', (_e, payload) => {
     const { projectPath, roleId } = payload || {}
     if (!projectPath || !roleId) throw new Error('缺少工程路径或角色ID')
-    const dir = path.join(rolesDir(projectPath), roleId)
-    const metaFile = path.join(dir, 'meta.json')
+    const metaFile = path.join(rolesDir(projectPath), roleId, 'meta.json')
     if (!fs.existsSync(metaFile)) throw new Error('角色不存在')
-    const meta = JSON.parse(fs.readFileSync(metaFile, 'utf-8'))
-    const profileFile = path.join(dir, 'profile.md')
-    const profile = fs.existsSync(profileFile) ? fs.readFileSync(profileFile, 'utf-8') : ''
-    return { meta, profile }
+    return JSON.parse(fs.readFileSync(metaFile, 'utf-8'))
   })
 
-  // 保存角色：写入 meta.json / profile.md，并更新索引
+  // 保存角色：以 JSON（meta.json）管理，并更新索引
   ipcMain.handle('roles:save', (_e, payload) => {
     const { projectPath, role } = payload || {}
     if (!projectPath || !role) throw new Error('缺少工程路径或角色数据')
@@ -76,15 +72,12 @@ export function registerRolesIpc() {
       appearance: role.appearance || '',
       voice: role.voice || '',
       tags: toArray(role.tags),
-      avatarAssetId: role.avatarAssetId || '',
-      referenceAssetIds: toArray(role.referenceAssetIds),
-      appearEpisodes: toArray(role.appearEpisodes),
-      relations: toArray(role.relations),
+      imageAssetId: role.imageAssetId || '', // 角色形象图（图片资产）
+      voiceAssetId: role.voiceAssetId || '', // 角色声线（音频资产）
       createdAt: role.createdAt || now,
       updatedAt: now,
     }
     fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify(meta, null, 2), 'utf-8')
-    fs.writeFileSync(path.join(dir, 'profile.md'), role.profile || '', 'utf-8')
 
     // 更新索引
     const index = readIndex(projectPath)
@@ -95,8 +88,7 @@ export function registerRolesIpc() {
       gender: meta.gender,
       age: meta.age,
       tags: meta.tags,
-      avatarAssetId: meta.avatarAssetId,
-      appearEpisodes: meta.appearEpisodes,
+      imageAssetId: meta.imageAssetId,
       updatedAt: meta.updatedAt,
       dir: id,
     }
