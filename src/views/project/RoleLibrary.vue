@@ -5,12 +5,15 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { message, Modal } from 'ant-design-vue'
 import { Users, Plus, Sparkles, Save, Trash2, Eye, Code, Search, X } from 'lucide-vue-next'
 import { useAppStore } from '../../store/appState.js'
+import { useUsageStore } from '../../store/usage.js'
 import { api } from '../../services/bridge.js'
 import { genLocalId } from '../../utils/id.js'
-import { renderMarkdown } from '../../utils/markdown.js'
+import { renderMarkdown, parseExtractedRoles } from '../../utils/markdown.js'
 import { assetUrl } from '../../utils/asset.js'
+import { extractRolesFromScript } from '../../services/ai.js'
 
 const appStore = useAppStore()
+const usageStore = useUsageStore()
 const project = computed(() => appStore.currentProject)
 
 const assets = ref([])
@@ -291,6 +294,118 @@ async function loadAssets() {
   }
 }
 
+// ---------- AI 提取角色 ----------
+const extracting = ref(false)
+const extractOpen = ref(false)
+const importingRoles = ref(false)
+const extractRoles = ref([])
+
+function buildRoleProfile(d) {
+  const eps = (d.appearEpisodes || []).map((n) => `第${n}集`).join('、') || '—'
+  const rels = (d.relations || []).map((r) => `- ${r.targetName}：${r.relation}`).join('\n') || '-'
+  return `# ${d.name}
+
+## 基础信息
+
+- 角色定位：${d.roleType || ''}
+- 性别：${d.gender || ''}
+- 年龄：${d.age || ''}
+- 身份：${d.identity || ''}
+- 出现集数：${eps}
+
+## 性格与动机
+
+- 性格：${d.personality || ''}
+- 核心动机：${d.motivation || ''}
+
+## 外观设定
+
+- ${d.appearance || ''}
+
+## 说话方式
+
+- ${d.voice || ''}
+
+## 角色关系
+
+${rels}
+`
+}
+
+async function aiExtract() {
+  if (!project.value?.path) return
+  if (!(appStore.settings.models || []).length) return message.warning('请先在设置页添加模型')
+  extracting.value = true
+  try {
+    const list = await api.scripts.list(project.value.path)
+    if (!list.length) {
+      message.warning('当前工程还没有剧本，请先在剧本库创建')
+      return
+    }
+    const data = await api.scripts.read({ projectPath: project.value.path, scriptId: list[0].id })
+    const parts = [data.overview || '']
+    ;(data.episodes || []).forEach((e) => parts.push(e.content || ''))
+    const scriptText = parts.filter(Boolean).join('\n\n').slice(0, 20000)
+    const { markdown, usage } = await extractRolesFromScript({
+      scriptText,
+      modelId: appStore.currentModelId,
+    })
+    usageStore.add(project.value.path, usage)
+
+    const drafts = parseExtractedRoles(markdown)
+    if (!drafts.length) {
+      Object.assign(form, blankForm(), { id: genLocalId('role'), name: '待整理角色草稿', profile: markdown })
+      activeRoleId.value = form.id
+      editing.value = true
+      mode.value = 'source'
+      dirty.value = true
+      message.warning('未能自动拆分角色，已放入草稿，请手动整理后保存')
+      return
+    }
+    extractRoles.value = drafts.map((d) => ({ ...d, checked: true }))
+    extractOpen.value = true
+  } catch (err) {
+    message.error('AI提取角色失败：' + err.message)
+  } finally {
+    extracting.value = false
+  }
+}
+
+async function confirmImport() {
+  const chosen = extractRoles.value.filter((r) => r.checked)
+  if (!chosen.length) return message.warning('请至少选择一个角色')
+  importingRoles.value = true
+  try {
+    for (const d of chosen) {
+      await api.roles.save({
+        projectPath: project.value.path,
+        role: {
+          name: d.name,
+          roleType: d.roleType,
+          gender: d.gender,
+          age: d.age,
+          identity: d.identity,
+          personality: d.personality,
+          motivation: d.motivation,
+          appearance: d.appearance,
+          voice: d.voice,
+          tags: d.tags,
+          appearEpisodes: d.appearEpisodes,
+          relations: d.relations,
+          profile: buildRoleProfile(d),
+        },
+      })
+    }
+    await loadRoles()
+    extractOpen.value = false
+    message.success(`已导入 ${chosen.length} 个角色`)
+  } catch (err) {
+    message.error('导入失败：' + err.message)
+  } finally {
+    importingRoles.value = false
+  }
+}
+
 onMounted(() => {
   loadRoles()
   loadEpisodes()
@@ -354,8 +469,8 @@ onMounted(() => {
         <button class="foot-btn primary" @click="newRole">
           <Plus :size="15" /> 新建角色
         </button>
-        <button class="foot-btn" disabled title="将在后续任务开放">
-          <Sparkles :size="15" /> AI提取角色
+        <button class="foot-btn" :disabled="extracting" @click="aiExtract">
+          <Sparkles :size="15" /> {{ extracting ? '提取中…' : 'AI提取角色' }}
         </button>
       </div>
     </aside>
@@ -507,6 +622,31 @@ onMounted(() => {
         <div v-if="!assets.length" class="aside-hint">资产库暂无资产，可先在资产库导入。</div>
       </div>
     </aside>
+
+    <!-- AI 提取角色结果 -->
+    <a-modal
+      v-model:open="extractOpen"
+      title="AI 提取角色"
+      :width="560"
+      :confirm-loading="importingRoles"
+      ok-text="导入所选"
+      cancel-text="取消"
+      @ok="confirmImport"
+    >
+      <div class="extract-tip">已从当前剧本提取以下角色，勾选需要导入的角色。</div>
+      <div class="extract-list">
+        <label v-for="(r, idx) in extractRoles" :key="idx" class="extract-item">
+          <a-checkbox v-model:checked="r.checked" />
+          <div class="extract-info">
+            <div class="extract-name">
+              {{ r.name }}
+              <span class="extract-type">{{ r.roleType }}</span>
+            </div>
+            <div class="extract-desc">{{ r.identity || r.personality || r.motivation || '—' }}</div>
+          </div>
+        </label>
+      </div>
+    </a-modal>
   </div>
 </template>
 
@@ -889,6 +1029,51 @@ onMounted(() => {
 .mini-btn.del:hover {
   color: #ff4d4f;
   border-color: #ff4d4f;
+}
+
+/* AI 提取角色弹窗 */
+.extract-tip {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+}
+.extract-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+.extract-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.extract-item:hover {
+  border-color: var(--brand-color);
+}
+.extract-info {
+  min-width: 0;
+}
+.extract-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.extract-type {
+  margin-left: 6px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--brand-color);
+}
+.extract-desc {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-top: 2px;
 }
 </style>
 

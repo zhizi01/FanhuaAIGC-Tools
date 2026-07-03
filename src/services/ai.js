@@ -236,3 +236,37 @@ ${episodeMarkdown}`
   const { content, usage } = await chatComplete({ modelId, system, user, temperature: 0.6, signal })
   return { markdown: stripCodeFence(content), usage }
 }
+
+const EXTRACT_ROLES_SYSTEM = `你是一个专业的漫剧角色分析助手。请从提供的剧本内容中提取主要角色，并输出规范化 Markdown。
+
+输出格式要求（必须严格遵守）：
+1. 只返回 Markdown，不要额外解释，不要用代码块围栏包裹。
+2. 每个角色使用“## 角色：角色名”作为标题。
+3. 每个角色下用无序列表给出以下字段（没有的可留空）：
+- 角色定位：主角/配角/反派/路人/旁白
+- 性别：
+- 年龄：
+- 身份：
+- 性格：
+- 核心动机：
+- 外观设定：
+- 说话方式：
+- 出现集数：用逗号分隔的阿拉伯数字，如 1, 2, 3
+- 标签：用逗号分隔
+4. 如果角色之间存在关系，追加“### 角色关系”小节，列出“- 对方角色：关系描述”。
+5. 只提取剧本中确实出现的角色，不要杜撰。`
+
+// 从剧本内容提取角色（返回 { markdown, usage }）
+export async function extractRolesFromScript({ scriptText, modelId, signal }) {
+  const user = `请从下面的剧本内容中提取主要角色，并按要求输出：
+
+${scriptText}`
+  const { content, usage } = await chatComplete({
+    modelId,
+    system: EXTRACT_ROLES_SYSTEM,
+    user,
+    temperature: 0.4,
+    signal,
+  })
+  return { markdown: stripCodeFence(content), usage }
+}

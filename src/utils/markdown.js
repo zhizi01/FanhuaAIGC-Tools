@@ -99,6 +99,77 @@ export function splitScriptMarkdown(fullMarkdown) {
   }
 }
 
+// 解析「AI提取角色」结果：按「## 角色：角色名」拆分为角色草稿
+export function parseExtractedRoles(md) {
+  const text = stripCodeFence(md).replace(/\r\n/g, '\n')
+  const lines = text.split('\n')
+  const ROLE_RE = /^##\s*角色\s*[：:]\s*(.+?)\s*$/
+  const FIELD_RE = /^[-*]\s*([^：:]+?)\s*[：:]\s*(.*)$/
+  const REL_HEAD_RE = /^###\s*角色关系/
+
+  const roles = []
+  let cur = null
+  let inRelations = false
+
+  const mapField = (role, key, val) => {
+    const k = key.trim()
+    const v = val.trim()
+    if (k.includes('定位')) role.roleType = v || role.roleType
+    else if (k.includes('性别')) role.gender = v
+    else if (k.includes('年龄')) role.age = v
+    else if (k.includes('身份')) role.identity = v
+    else if (k.includes('性格')) role.personality = v
+    else if (k.includes('动机')) role.motivation = v
+    else if (k.includes('外观')) role.appearance = v
+    else if (k.includes('说话') || k.includes('口吻') || k.includes('声音')) role.voice = v
+    else if (k.includes('出现') || k.includes('集数')) {
+      role.appearEpisodes = (v.match(/\d+/g) || []).map((n) => parseInt(n, 10))
+    } else if (k.includes('标签')) {
+      role.tags = v.split(/[,，、/]/).map((t) => t.trim()).filter(Boolean)
+    }
+  }
+
+  for (const line of lines) {
+    const rm = line.match(ROLE_RE)
+    if (rm) {
+      if (cur) roles.push(cur)
+      cur = {
+        name: rm[1].trim(),
+        roleType: '配角',
+        gender: '',
+        age: '',
+        identity: '',
+        personality: '',
+        motivation: '',
+        appearance: '',
+        voice: '',
+        appearEpisodes: [],
+        tags: [],
+        relations: [],
+      }
+      inRelations = false
+      continue
+    }
+    if (!cur) continue
+    if (REL_HEAD_RE.test(line)) {
+      inRelations = true
+      continue
+    }
+    if (/^#{1,3}\s/.test(line)) inRelations = false
+
+    const fm = line.match(FIELD_RE)
+    if (fm) {
+      if (inRelations) {
+        cur.relations.push({ targetName: fm[1].trim(), relation: fm[2].trim() })
+      } else {
+        mapField(cur, fm[1], fm[2])
+      }
+    }
+  }
+  if (cur) roles.push(cur)
+  return roles
+}
+
 // 从整套 Markdown 构建可保存的剧本对象
 export function buildScriptFromMarkdown(fullMarkdown, base = {}) {
   const { overview, episodes } = splitScriptMarkdown(fullMarkdown)
