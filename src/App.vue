@@ -20,7 +20,7 @@ const themeConfig = computed(() => {
   return {
     algorithm: dark ? theme.darkAlgorithm : theme.defaultAlgorithm,
     token: {
-      colorPrimary: appearance.primaryColor || '#1677ff',
+      colorPrimary: appearance.primaryColor || '#1ec9b0',
       borderRadius: 8,
     },
   }

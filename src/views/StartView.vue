@@ -239,7 +239,7 @@ onMounted(loadRecent)
   align-items: center;
   justify-content: center;
   color: #fff;
-  background: linear-gradient(135deg, var(--brand-color), #7aa7ff);
+  background: linear-gradient(135deg, var(--brand-color), #37e0c4);
 }
 .brand-title {
   font-size: 16px;

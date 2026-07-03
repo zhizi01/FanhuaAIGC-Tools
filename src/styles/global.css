@@ -51,3 +51,21 @@ body {
 .app-no-drag {
   -webkit-app-region: no-drag;
 }
+
+/* 统一修复按钮内图标与文本的对齐与间隔
+   lucide 图标不是 anticon，Ant 默认的 .anticon + span 间距规则对其无效，
+   会出现"图标和文本没有对齐 / 中间没有间隔"的情况，这里用 flex + gap 统一处理 */
+.ant-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.ant-btn > .anticon + span,
+.ant-btn > span + span {
+  margin-inline-start: 0;
+}
+.ant-btn .lucide,
+.ant-btn > svg {
+  flex-shrink: 0;
+}

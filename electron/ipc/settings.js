@@ -6,8 +6,8 @@ const FILE = 'settings.json'
 
 const DEFAULTS = {
   appearance: {
-    themeMode: 'system', // light | dark | system
-    primaryColor: '#1677ff',
+    themeMode: 'dark', // light | dark | system
+    primaryColor: '#1ec9b0',
     density: 'comfortable', // comfortable | compact
   },
   models: [],

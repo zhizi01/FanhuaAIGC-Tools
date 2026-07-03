@@ -112,7 +112,7 @@ onMounted(() => {
   align-items: center;
   justify-content: center;
   color: #fff;
-  background: linear-gradient(135deg, var(--brand-color), #7aa7ff);
+  background: linear-gradient(135deg, var(--brand-color), #37e0c4);
 }
 .side-app-name {
   font-size: 14px;

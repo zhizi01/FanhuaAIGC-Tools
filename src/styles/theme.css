@@ -1,12 +1,13 @@
-/* 主题变量：浅色 / 深色，配合设置页外观配置动态切换 */
+/* 主题变量：浅色 / 深色，配合设置页外观配置动态切换
+   品牌主色采用参考图的青绿（teal）色系 */
 :root {
-  --brand-color: #1677ff;
+  --brand-color: #1ec9b0;
 
-  --bg-app: #f5f6f8;
+  --bg-app: #f4f6f7;
   --bg-panel: #ffffff;
   --bg-elevated: #ffffff;
-  --bg-hover: #f0f2f5;
-  --bg-active: #e6f0ff;
+  --bg-hover: #eef1f2;
+  --bg-active: rgba(30, 201, 176, 0.12);
 
   --text-primary: #1f2329;
   --text-secondary: #5a6570;
@@ -27,21 +28,22 @@
   --sidebar-width: 220px;
 }
 
+/* 深色主题：参考图的深色配色系（深炭底 + 青绿高亮） */
 [data-theme='dark'] {
-  --bg-app: #17181c;
-  --bg-panel: #1f2127;
-  --bg-elevated: #24262d;
-  --bg-hover: #2a2d35;
-  --bg-active: #223049;
+  --bg-app: #0e1116;
+  --bg-panel: #161a22;
+  --bg-elevated: #1c212b;
+  --bg-hover: #242a35;
+  --bg-active: rgba(30, 201, 176, 0.16);
 
-  --text-primary: #e8eaed;
-  --text-secondary: #a8b0ba;
-  --text-tertiary: #737b85;
+  --text-primary: #e6e9ee;
+  --text-secondary: #9aa4b2;
+  --text-tertiary: #6b7482;
 
-  --border-color: #2c2f36;
-  --border-strong: #3a3e46;
+  --border-color: #262b34;
+  --border-strong: #363c47;
 
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.4);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 20px rgba(0, 0, 0, 0.45);
 }
 
 [data-density='compact'] {

@@ -7,7 +7,7 @@ const LS_SETTINGS = 'qs_settings'
 const LS_RECENT = 'qs_recent_projects'
 
 const DEFAULT_SETTINGS = {
-  appearance: { themeMode: 'system', primaryColor: '#1677ff', density: 'comfortable' },
+  appearance: { themeMode: 'dark', primaryColor: '#1ec9b0', density: 'comfortable' },
   models: [],
 }
 
@@ -26,6 +26,41 @@ function lsSet(key, val) {
 
 const desktopOnly = (name) => () => {
   throw new Error(`「${name}」需要在桌面应用中使用`)
+}
+
+// 跨 Electron contextBridge 传参会做结构化克隆，Vue 的响应式代理无法被克隆，
+// 这里统一转成纯对象，避免「An object could not be cloned」错误
+function toPlain(value) {
+  if (value == null || typeof value !== 'object') return value
+  return JSON.parse(JSON.stringify(value))
+}
+
+// 包一层：把对象类型的入参在进入 IPC 前转为纯对象
+function wrapElectronApi(raw) {
+  return {
+    settings: {
+      get: () => raw.settings.get(),
+      save: (data) => raw.settings.save(toPlain(data)),
+    },
+    projects: {
+      listRecent: () => raw.projects.listRecent(),
+      create: (payload) => raw.projects.create(toPlain(payload)),
+      open: (dir) => raw.projects.open(dir),
+      removeRecent: (id) => raw.projects.removeRecent(id),
+    },
+    scripts: {
+      list: (projectPath) => raw.scripts.list(projectPath),
+      save: (payload) => raw.scripts.save(toPlain(payload)),
+      read: (payload) => raw.scripts.read(toPlain(payload)),
+      remove: (payload) => raw.scripts.remove(toPlain(payload)),
+      uploadAndParse: (payload) => raw.scripts.uploadAndParse(toPlain(payload)),
+    },
+    dialog: {
+      selectProjectDir: () => raw.dialog.selectProjectDir(),
+      selectScriptFile: () => raw.dialog.selectScriptFile(),
+    },
+    onNavigate: raw.onNavigate,
+  }
 }
 
 const fallbackApi = {
@@ -59,5 +94,5 @@ const fallbackApi = {
   },
 }
 
-export const api = hasElectron ? window.api : fallbackApi
+export const api = hasElectron ? wrapElectronApi(window.api) : fallbackApi
 export const isElectron = hasElectron

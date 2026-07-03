@@ -8,7 +8,7 @@ import { genLocalId } from '../utils/id.js'
 
 const router = useRouter()
 
-const PRESET_COLORS = ['#1677ff', '#722ed1', '#13c2c2', '#52c41a', '#fa8c16', '#eb2f96', '#f5222d']
+const PRESET_COLORS = ['#1ec9b0', '#13c2c2', '#1677ff', '#722ed1', '#52c41a', '#fa8c16', '#eb2f96']
 const MAX_CONTEXT = 1000000
 
 const appearance = computed(() => appState.settings.appearance)
@@ -215,7 +215,7 @@ function formatContext(size) {
             <div class="model-main">
               <div class="model-name-row">
                 <span class="model-name">{{ m.displayName }}</span>
-                <a-tag v-if="m.isDefault" color="blue">默认</a-tag>
+                <a-tag v-if="m.isDefault" color="cyan">默认</a-tag>
               </div>
               <div class="model-detail">
                 <span class="model-code">{{ m.modelCode }}</span>
