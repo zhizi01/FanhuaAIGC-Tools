@@ -1,15 +1,15 @@
-// 角色 AI 任务（Pinia）：AI 补全角色卡 / AI 提取角色在后台运行，切换界面不中断
+// 角色 AI 任务（Pinia）：AI 调整角色信息 / AI 提取角色在后台运行，切换界面不中断
 import { defineStore } from 'pinia'
 import { api } from '../services/bridge.js'
 import { parseExtractedRoles } from '../utils/markdown.js'
-import { completeRoleCard, extractRolesFromScript } from '../services/ai.js'
+import { adjustRoleCard, extractRolesFromScript } from '../services/ai.js'
 import { useAppStore } from './appState.js'
 import { useUsageStore } from './usage.js'
 
 export const useRoleTaskStore = defineStore('roleTask', {
   state: () => ({
     active: false,
-    kind: '', // 'complete' | 'extract'
+    kind: '', // 'adjust' | 'extract'
     roleName: '',
     roleId: '',
     status: 'idle', // idle | running | done | error
@@ -21,11 +21,11 @@ export const useRoleTaskStore = defineStore('roleTask', {
     extractCount: 0,
   }),
   actions: {
-    completeRole({ projectPath, role, scriptText }) {
+    adjustRole({ projectPath, role, scriptText, instruction }) {
       if (this.active) return { ok: false, reason: '已有角色 AI 任务进行中，请稍候' }
       if (!projectPath || !role?.id) return { ok: false, reason: '角色数据不完整' }
       this.active = true
-      this.kind = 'complete'
+      this.kind = 'adjust'
       this.roleName = role.name
       this.roleId = role.id
       this.status = 'running'
@@ -33,33 +33,36 @@ export const useRoleTaskStore = defineStore('roleTask', {
       this.resultRoleId = null
       this.extractDrafts = []
       this.extractCount = 0
-      this._runComplete(projectPath, role, scriptText)
+      this._runAdjust(projectPath, role, scriptText, instruction)
       return { ok: true }
     },
 
-    async _runComplete(projectPath, role, scriptText) {
+    async _runAdjust(projectPath, role, scriptText, instruction) {
       const usageStore = useUsageStore()
       try {
-        const { markdown, usage } = await completeRoleCard({
+        const { markdown, usage } = await adjustRoleCard({
           role,
           scriptText,
+          instruction,
           modelId: useAppStore().currentModelId,
         })
         usageStore.add(projectPath, usage)
         const d = parseExtractedRoles(markdown)[0] || {}
-        // 合并：空字段用模型补全，已填字段保留；标签取并集
+        // 合并：AI 调整允许覆盖关键文本字段，但保留 id、姓名、图片和创建时间
         const merged = {
           ...role,
-          roleType: role.roleType || d.roleType || '配角',
-          gender: role.gender || d.gender || '',
-          age: role.age || d.age || '',
-          identity: role.identity || d.identity || '',
-          personality: role.personality || d.personality || '',
-          motivation: role.motivation || d.motivation || '',
-          appearance: role.appearance || d.appearance || '',
-          voice: role.voice || d.voice || '',
-          voiceLine: role.voiceLine || d.voiceLine || '',
-          tags: Array.from(new Set([...(role.tags || []), ...(d.tags || [])])),
+          name: role.name,
+          roleType: d.roleType || role.roleType || '配角',
+          gender: d.gender || role.gender || '',
+          age: d.age || role.age || '',
+          identity: d.identity || role.identity || '',
+          personality: d.personality || role.personality || '',
+          motivation: d.motivation || role.motivation || '',
+          appearance: d.appearance || role.appearance || '',
+          voice: d.voice || role.voice || '',
+          voiceLine: d.voiceLine || role.voiceLine || '',
+          images: role.images || [],
+          createdAt: role.createdAt,
         }
         const meta = await api.roles.save({ projectPath, role: merged })
         this.resultRoleId = meta.id

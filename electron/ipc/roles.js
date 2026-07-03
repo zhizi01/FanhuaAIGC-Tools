@@ -40,7 +40,22 @@ export function registerRolesIpc() {
   // 角色列表
   ipcMain.handle('roles:list', (_e, projectPath) => {
     if (!projectPath) return []
-    return readIndex(projectPath).items
+    return readIndex(projectPath).items.map((item) => {
+      if (item.identity != null) return item
+      try {
+        const metaFile = path.join(rolesDir(projectPath), item.id, 'meta.json')
+        if (!fs.existsSync(metaFile)) return item
+        const meta = JSON.parse(fs.readFileSync(metaFile, 'utf-8'))
+        return {
+          ...item,
+          identity: meta.identity || '',
+          gender: item.gender || meta.gender || '',
+          age: item.age || meta.age || '',
+        }
+      } catch {
+        return item
+      }
+    })
   })
 
   // 读取单个角色（结构化 JSON meta）
@@ -73,7 +88,6 @@ export function registerRolesIpc() {
       motivation: role.motivation || '',
       appearance: role.appearance || '',
       voice: role.voice || '',
-      tags: toArray(role.tags),
       images: toArray(role.images), // 角色形象图（工程内相对路径数组，支持多张）
       voiceLine: role.voiceLine || '', // 角色声线（文本描述，供视频/配音模型使用）
       createdAt: role.createdAt || now,
@@ -89,7 +103,7 @@ export function registerRolesIpc() {
       roleType: meta.roleType,
       gender: meta.gender,
       age: meta.age,
-      tags: meta.tags,
+      identity: meta.identity,
       cover: meta.images[0] || '', // 列表卡片缩略图
       updatedAt: meta.updatedAt,
       dir: id,

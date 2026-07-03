@@ -1,5 +1,5 @@
 <script setup>
-// 全局 AI 任务状态浮标：剧本生成/标准化、角色提取/补全，运行中/完成/失败，跨界面常驻
+// 全局 AI 任务状态浮标：剧本生成/标准化、角色提取/调整，运行中/完成/失败，跨界面常驻
 import { computed, watch, onBeforeUnmount } from 'vue'
 import { LoaderCircle, CheckCircle2, AlertCircle, X } from 'lucide-vue-next'
 import { useAiTaskStore } from '../store/aiTasks.js'
@@ -14,23 +14,23 @@ const kindLabel = computed(() => (aiTask.kind === 'ai' ? 'AI生成' : '标准化
 
 // ---------- 角色任务 ----------
 const roleVisible = computed(() => roleTask.status !== 'idle')
-const roleKindLabel = computed(() => (roleTask.kind === 'extract' ? '提取角色' : '补全角色'))
+const roleKindLabel = computed(() => (roleTask.kind === 'extract' ? '提取角色' : '调整角色'))
 const roleTitle = computed(() => {
   if (roleTask.status === 'running') return `正在AI${roleKindLabel.value}…`
-  if (roleTask.status === 'done') return roleTask.kind === 'extract' ? '角色提取完成' : '角色补全完成'
-  return roleTask.kind === 'extract' ? '角色提取失败' : '角色补全失败'
+  if (roleTask.status === 'done') return roleTask.kind === 'extract' ? '角色提取与补全完成' : '角色调整完成'
+  return roleTask.kind === 'extract' ? '角色提取失败' : '角色调整失败'
 })
 const roleDesc = computed(() => {
   if (roleTask.status === 'error') return roleTask.error
   if (roleTask.kind === 'extract') {
     if (roleTask.status === 'done') {
       return roleTask.extractCount
-        ? `识别到 ${roleTask.extractCount} 个角色，进入角色库确认导入`
+        ? `识别到 ${roleTask.extractCount} 个角色，已补全外观、性格与声线`
         : '未识别到角色，可手动新建'
     }
-    return '正在从当前剧本分析角色…'
+    return '正在从当前剧本分析并补全角色…'
   }
-  return roleTask.roleName ? `角色：${roleTask.roleName}` : ''
+  return roleTask.roleName ? `正在强化外观、性格与声线：${roleTask.roleName}` : ''
 })
 
 let aiTimer = null

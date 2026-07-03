@@ -237,7 +237,16 @@ ${episodeMarkdown}`
   return { markdown: stripCodeFence(content), usage }
 }
 
-const EXTRACT_ROLES_SYSTEM = `你是一个专业的漫剧角色分析助手。请从提供的剧本内容中提取主要角色，并输出规范化 Markdown。
+const EXTRACT_ROLES_SYSTEM = `你是一个专业的漫剧角色设定助手。请从提供的剧本内容中提取主要角色，并自动补全角色卡信息，输出规范化 Markdown。
+
+工作重点：
+1. 不是只做名单提取，而是要形成可直接用于后续分镜、图片生成、配音和视频生成的角色卡。
+2. 外观设定、性格、说话方式、声线是关键字段，必须尽量具体、稳定、可复用。
+3. 外观设定要包含发型、脸部/体态特征、服装风格、辨识物、气质，不要只写“漂亮”“帅气”。
+4. 性格要结合行为动机和剧情表现，不要只写泛泛的形容词。
+5. 说话方式描述语言习惯、语速、句式、情绪表达方式。
+6. 声线要写成供配音/视频模型使用的声音描述，例如音色、年龄感、语速、气息、情绪质感。
+7. 剧本没有明说但能合理推断的信息可以补全，但不要杜撰剧本中完全不存在的主要角色。
 
 输出格式要求（必须严格遵守）：
 1. 只返回 Markdown，不要额外解释，不要用代码块围栏包裹。
@@ -251,14 +260,24 @@ const EXTRACT_ROLES_SYSTEM = `你是一个专业的漫剧角色分析助手。�
 - 核心动机：
 - 外观设定：
 - 说话方式：
+- 声线：
 - 出现集数：用逗号分隔的阿拉伯数字，如 1, 2, 3
-- 标签：用逗号分隔
 4. 如果角色之间存在关系，追加“### 角色关系”小节，列出“- 对方角色：关系描述”。
 5. 只提取剧本中确实出现的角色，不要杜撰。`
 
-// AI 补全角色卡：根据已知信息与剧本，补全角色缺失字段（返回 { markdown, usage }）
-export async function completeRoleCard({ role, scriptText, modelId, signal }) {
-  const system = `你是漫剧角色卡补全助手。请根据已知信息与剧本，补全该角色缺失的字段，输出单个角色的规范化 Markdown。
+// AI 调整角色卡：根据已知信息与剧本，重新整理并强化角色关键设定（返回 { markdown, usage }）
+export async function adjustRoleCard({ role, scriptText, instruction, modelId, signal }) {
+  const system = `你是漫剧角色卡调整助手。请根据已知信息与剧本，重新整理并强化该角色信息，输出单个角色的规范化 Markdown。
+
+调整重点：
+1. 可以优化和改写已有字段，不只是补空。
+2. 必须重点强化“外观设定”“性格”“说话方式”“声线”。
+3. 外观设定要具体到发型、体态、服装、辨识物、气质，便于后续图片生成保持一致。
+4. 性格要结合角色动机、行为方式和人物弧光。
+5. 说话方式要描述语言习惯、语速、句式、情绪表达。
+6. 声线要写成供配音/视频模型使用的声音描述，包含音色、年龄感、语速、气息和情绪质感。
+7. 不要改变角色姓名和核心剧情定位，不要添加与剧本冲突的信息。
+8. 如果用户提供了调整想法，应优先满足用户调整想法；没有提供时再按默认重点调整。
 
 格式（严格遵守，只返回该角色）：
 ## 角色：${role?.name || '角色'}
@@ -271,7 +290,6 @@ export async function completeRoleCard({ role, scriptText, modelId, signal }) {
 - 外观设定：
 - 说话方式：
 - 声线：供配音/视频模型使用的声音描述
-- 标签：逗号分隔
 
 不要解释，不要使用代码块围栏。`
   const user = `已知角色信息：
@@ -284,10 +302,12 @@ export async function completeRoleCard({ role, scriptText, modelId, signal }) {
 外观设定：${role?.appearance || ''}
 说话方式：${role?.voice || ''}
 声线：${role?.voiceLine || ''}
-标签：${(role?.tags || []).join(', ')}
+
+用户调整想法：
+${instruction || '（未提供，请重点强化外观设定、性格、说话方式和声线）'}
 
 剧本参考：
-${scriptText || '（无剧本参考，请根据已知信息合理补全）'}`
+${scriptText || '（无剧本参考，请根据已知信息合理调整）'}`
 
   const { content, usage } = await chatComplete({ modelId, system, user, temperature: 0.5, signal })
   return { markdown: stripCodeFence(content), usage }

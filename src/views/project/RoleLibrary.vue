@@ -27,7 +27,6 @@ const dirty = ref(false)
 
 const search = ref('')
 const filterType = ref('')
-const filterTag = ref('')
 
 const form = reactive(blankForm())
 
@@ -44,7 +43,6 @@ function blankForm() {
     appearance: '',
     voice: '',
     voiceLine: '',
-    tags: [],
     images: [],
     createdAt: '',
   }
@@ -59,18 +57,12 @@ function roleThumbUrl(r) {
 }
 
 // ---------- 列表与筛选 ----------
-const allTags = computed(() => {
-  const set = new Set()
-  roles.value.forEach((r) => (r.tags || []).forEach((t) => set.add(t)))
-  return [...set]
-})
-
 const filteredRoles = computed(() => {
   const kw = search.value.trim().toLowerCase()
   return roles.value.filter((r) => {
     if (filterType.value && r.roleType !== filterType.value) return false
-    if (filterTag.value && !(r.tags || []).includes(filterTag.value)) return false
-    if (kw && !(r.name || '').toLowerCase().includes(kw)) return false
+    const haystack = [r.name, r.identity, r.gender, r.age].filter(Boolean).join(' ').toLowerCase()
+    if (kw && !haystack.includes(kw)) return false
     return true
   })
 })
@@ -128,12 +120,19 @@ function aiGenerateImage() {
   message.info('AI 形象图生成能力开发中（已预留 TODO）')
 }
 
-// ---------- AI 补全角色卡（后台运行） ----------
-async function aiComplete() {
+// ---------- AI 调整角色信息（后台运行） ----------
+const adjustOpen = ref(false)
+const adjustInstruction = ref('')
+
+function openAdjustModal() {
   if (!project.value?.path) return
   if (!form.name.trim()) return message.warning('请先填写角色名')
   if (!(appStore.settings.models || []).length) return message.warning('请先在设置页添加模型')
-  if (dirty.value) return message.warning('有未保存的修改，请先保存后再补全')
+  adjustInstruction.value = ''
+  adjustOpen.value = true
+}
+
+async function confirmAiAdjust() {
   let scriptText = ''
   try {
     const list = await api.scripts.list(project.value.path)
@@ -146,15 +145,21 @@ async function aiComplete() {
   } catch {
     scriptText = ''
   }
-  const res = roleTask.completeRole({ projectPath: project.value.path, role: { ...form }, scriptText })
+  const res = roleTask.adjustRole({
+    projectPath: project.value.path,
+    role: { ...form },
+    scriptText,
+    instruction: adjustInstruction.value.trim(),
+  })
   if (!res.ok) return message.warning(res.reason)
-  message.success('已开始 AI 补全（后台进行，可继续操作）')
+  adjustOpen.value = false
+  message.success('已开始 AI 调整角色信息（后台进行，可继续操作）')
 }
 
 watch(
   () => roleTask.version,
   async () => {
-    if (roleTask.status === 'done' && roleTask.kind === 'complete') {
+    if (roleTask.status === 'done' && roleTask.kind === 'adjust') {
       await loadRoles()
       if (roleTask.resultRoleId && roleTask.resultRoleId === activeRoleId.value) {
         try {
@@ -165,11 +170,11 @@ watch(
           // ignore
         }
       }
-      message.success('AI 补全完成')
+      message.success('AI 调整角色信息完成')
     } else if (roleTask.status === 'done' && roleTask.kind === 'extract') {
       openExtractResult()
     } else if (roleTask.status === 'error') {
-      message.error((roleTask.kind === 'extract' ? 'AI提取角色失败：' : 'AI 补全失败：') + roleTask.error)
+      message.error((roleTask.kind === 'extract' ? 'AI提取角色失败：' : 'AI调整角色信息失败：') + roleTask.error)
     }
   },
 )
@@ -200,7 +205,6 @@ function applyRole(meta) {
     appearance: meta.appearance || '',
     voice: meta.voice || '',
     voiceLine: meta.voiceLine || '',
-    tags: [...(meta.tags || [])],
     images: [...(meta.images || [])],
     createdAt: meta.createdAt || '',
   })
@@ -294,7 +298,7 @@ function aiExtract() {
   if (!(appStore.settings.models || []).length) return message.warning('请先在设置页添加模型')
   const res = roleTask.extractRoles({ projectPath: project.value.path })
   if (!res.ok) return message.warning(res.reason)
-  message.success('已开始 AI 提取角色（后台进行，可切换界面）')
+  message.success('已开始 AI 提取并补全角色信息（后台进行，可切换界面）')
 }
 
 // 读取后台提取结果并弹出确认导入；无结果时提示手动新建
@@ -326,7 +330,7 @@ async function confirmImport() {
           motivation: d.motivation,
           appearance: d.appearance,
           voice: d.voice,
-          tags: d.tags,
+          voiceLine: d.voiceLine,
         },
       })
     }
@@ -363,12 +367,6 @@ onMounted(() => {
             class="filter-select"
             :options="[{ value: '', label: '全部定位' }, ...ROLE_TYPES.map((t) => ({ value: t, label: t }))]"
           />
-          <a-select
-            v-model:value="filterTag"
-            size="small"
-            class="filter-select"
-            :options="[{ value: '', label: '全部标签' }, ...allTags.map((t) => ({ value: t, label: t }))]"
-          />
         </div>
       </div>
 
@@ -390,8 +388,11 @@ onMounted(() => {
                 <span class="role-name">{{ r.name }}</span>
                 <span class="role-type-badge">{{ r.roleType }}</span>
               </div>
-              <div v-if="r.tags && r.tags.length" class="role-tags">
-                <span v-for="t in r.tags" :key="t" class="role-tag">{{ t }}</span>
+              <div class="role-meta">
+                <span v-if="r.identity" class="role-meta-text">{{ r.identity }}</span>
+                <span v-if="r.gender || r.age" class="role-meta-sub">
+                  {{ [r.gender, r.age].filter(Boolean).join(' · ') }}
+                </span>
               </div>
             </div>
           </button>
@@ -430,10 +431,10 @@ onMounted(() => {
             <a-button
               :loading="roleTask.active && roleTask.roleId === form.id"
               :disabled="roleTask.active"
-              @click="aiComplete"
+              @click="openAdjustModal"
             >
               <template #icon><Wand2 :size="15" /></template>
-              AI补全
+              AI调整
             </a-button>
             <a-button danger @click="removeRole">
               <template #icon><Trash2 :size="15" /></template>
@@ -449,7 +450,7 @@ onMounted(() => {
         <div class="main-body">
           <div class="role-form">
             <div v-if="roleTask.active && roleTask.roleId === form.id" class="ai-banner">
-              <LoaderCircle :size="15" class="spin" /> AI 正在后台补全该角色信息…
+              <LoaderCircle :size="15" class="spin" /> AI 正在后台调整该角色的外观、性格与声线…
             </div>
 
             <a-form layout="vertical">
@@ -468,27 +469,24 @@ onMounted(() => {
                 <a-input v-model:value="form.identity" placeholder="如：便利店店员 / 隐藏继承人" @change="markDirty" />
               </a-form-item>
               <a-form-item label="性格">
-                <a-input v-model:value="form.personality" placeholder="如：隐忍、敏感、行动力强" @change="markDirty" />
+                <a-textarea v-model:value="form.personality" :rows="3" placeholder="如：隐忍、敏感、行动力强；遇到压力时会先压住情绪再行动" @change="markDirty" />
               </a-form-item>
               <a-form-item label="核心动机">
-                <a-input v-model:value="form.motivation" placeholder="如：查清父亲失踪真相" @change="markDirty" />
+                <a-textarea v-model:value="form.motivation" :rows="3" placeholder="如：查清父亲失踪真相；证明自己不是只能被安排命运的人" @change="markDirty" />
               </a-form-item>
               <a-form-item label="外观设定">
-                <a-textarea v-model:value="form.appearance" :rows="2" placeholder="如：黑色长发，清瘦，常穿深色外套" @change="markDirty" />
+                <a-textarea v-model:value="form.appearance" :rows="4" placeholder="如：黑色长发，清瘦，常穿深色外套；眼神克制，雨夜场景常带透明雨伞" @change="markDirty" />
               </a-form-item>
               <a-form-item label="说话方式">
-                <a-textarea v-model:value="form.voice" :rows="2" placeholder="如：语速偏慢，情绪压住时声音发紧" @change="markDirty" />
+                <a-textarea v-model:value="form.voice" :rows="3" placeholder="如：语速偏慢，情绪压住时声音发紧；习惯用短句反问，不轻易示弱" @change="markDirty" />
               </a-form-item>
               <a-form-item label="角色声线（供视频/配音模型使用的文本描述）">
                 <a-textarea
                   v-model:value="form.voiceLine"
-                  :rows="2"
+                  :rows="3"
                   placeholder="如：低沉磁性的青年男声，略带沙哑，语气克制而坚定"
                   @change="markDirty"
                 />
-              </a-form-item>
-              <a-form-item label="标签">
-                <a-select v-model:value="form.tags" mode="tags" placeholder="输入后回车添加标签" @change="markDirty" />
               </a-form-item>
             </a-form>
 
@@ -516,6 +514,26 @@ onMounted(() => {
       </template>
     </section>
 
+    <!-- AI 调整角色信息 -->
+    <a-modal
+      v-model:open="adjustOpen"
+      title="AI 调整角色信息"
+      :width="560"
+      ok-text="开始调整"
+      cancel-text="取消"
+      :confirm-loading="roleTask.active && roleTask.kind === 'adjust'"
+      @ok="confirmAiAdjust"
+    >
+      <div class="adjust-tip">
+        可以说明你希望怎样调整这个角色。AI 会重点处理外观设定、性格、说话方式和声线。
+      </div>
+      <a-textarea
+        v-model:value="adjustInstruction"
+        :rows="5"
+        placeholder="例如：外观更有都市冷感，性格更克制但内心有爆发力；声线偏低、略沙哑，适合短剧女主。"
+      />
+    </a-modal>
+
     <!-- AI 提取角色结果 -->
     <a-modal
       v-model:open="extractOpen"
@@ -526,7 +544,7 @@ onMounted(() => {
       cancel-text="取消"
       @ok="confirmImport"
     >
-      <div class="extract-tip">已从当前剧本提取以下角色，勾选需要导入的角色。</div>
+      <div class="extract-tip">已从当前剧本提取并补全以下角色，重点包含外观设定、性格与声线，勾选需要导入的角色。</div>
       <div class="extract-list">
         <label v-for="(r, idx) in extractRoles" :key="idx" class="extract-item">
           <a-checkbox v-model:checked="r.checked" />
@@ -603,7 +621,7 @@ onMounted(() => {
   flex-direction: column;
   gap: 6px;
 }
-/* 角色卡：宽度统一，标签多行且每行等高 */
+/* 角色卡：宽度统一，展示身份、性别和年龄 */
 .role-card {
   display: flex;
   align-items: flex-start;
@@ -671,22 +689,26 @@ onMounted(() => {
   color: var(--brand-color);
   background: var(--brand-soft);
 }
-.role-tags {
+.role-meta {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 6px;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 5px;
+  min-height: 32px;
 }
-.role-tag {
-  display: inline-flex;
-  align-items: center;
-  height: 20px;
-  padding: 0 8px;
-  border-radius: 6px;
-  font-size: 11px;
-  line-height: 1;
+.role-meta-text,
+.role-meta-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.role-meta-text {
+  font-size: 12px;
   color: var(--text-secondary);
-  background: var(--bg-hover);
+}
+.role-meta-sub {
+  font-size: 11px;
+  color: var(--text-tertiary);
 }
 .list-empty {
   padding: 24px 12px;
@@ -921,6 +943,7 @@ onMounted(() => {
 }
 
 /* AI 提取角色弹窗 */
+.adjust-tip,
 .extract-tip {
   font-size: 13px;
   color: var(--text-secondary);
