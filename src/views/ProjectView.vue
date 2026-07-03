@@ -73,35 +73,37 @@ watch(
         </button>
       </nav>
 
-      <!-- 侧栏底部：设置 + 返回主菜单 -->
-      <div class="side-footer">
-        <button class="foot-item" @click="openSettings">
-          <Settings :size="17" />
-          <span>设置</span>
-        </button>
-        <button class="foot-item back" @click="backToStart">
-          <LogOut :size="17" />
-          <span>返回主菜单</span>
-        </button>
-      </div>
-
-      <!-- 左下角：Token 用量（默认简展示，悬停出详情） -->
-      <a-popover placement="topLeft" trigger="hover">
-        <template #content>
-          <div class="usage-pop">
-            <div class="usage-pop-title">本工程 Token 用量</div>
-            <div class="usage-pop-row"><span>总消耗</span><b>{{ usage.totalTokens.toLocaleString() }}</b></div>
-            <div class="usage-pop-row"><span>输入</span><b>{{ usage.promptTokens.toLocaleString() }}</b></div>
-            <div class="usage-pop-row"><span>输出</span><b>{{ usage.completionTokens.toLocaleString() }}</b></div>
-            <div class="usage-pop-row"><span>请求次数</span><b>{{ usage.requests }}</b></div>
+      <!-- 侧栏底部：Token 用量（分割线上方） + 设置 + 返回主菜单 -->
+      <div class="side-bottom">
+        <!-- Token 用量（默认简展示，悬停出详情） -->
+        <a-popover placement="topLeft" trigger="hover">
+          <template #content>
+            <div class="usage-pop">
+              <div class="usage-pop-title">本工程 Token 用量</div>
+              <div class="usage-pop-row"><span>总消耗</span><b>{{ usage.totalTokens.toLocaleString() }}</b></div>
+              <div class="usage-pop-row"><span>输入</span><b>{{ usage.promptTokens.toLocaleString() }}</b></div>
+              <div class="usage-pop-row"><span>输出</span><b>{{ usage.completionTokens.toLocaleString() }}</b></div>
+              <div class="usage-pop-row"><span>请求次数</span><b>{{ usage.requests }}</b></div>
+            </div>
+          </template>
+          <div class="side-usage">
+            <Coins :size="15" />
+            <span class="usage-num">{{ formatTokens(usage.totalTokens) }}</span>
+            <span class="usage-unit">tokens</span>
           </div>
-        </template>
-        <div class="side-usage">
-          <Coins :size="15" />
-          <span class="usage-num">{{ formatTokens(usage.totalTokens) }}</span>
-          <span class="usage-unit">tokens</span>
+        </a-popover>
+
+        <div class="side-footer">
+          <button class="foot-item" @click="openSettings">
+            <Settings :size="17" />
+            <span>设置</span>
+          </button>
+          <button class="foot-item back" @click="backToStart">
+            <LogOut :size="17" />
+            <span>返回主菜单</span>
+          </button>
         </div>
-      </a-popover>
+      </div>
     </aside>
 
     <div class="project-work">
@@ -217,9 +219,11 @@ watch(
   justify-content: center;
 }
 
-/* 底部操作 */
-.side-footer {
+/* 底部区域：用量 + 分割线 + 操作 */
+.side-bottom {
   margin-top: auto;
+}
+.side-footer {
   padding-top: 12px;
   border-top: 1px solid var(--border-color);
   display: flex;
@@ -253,7 +257,7 @@ watch(
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: 8px;
+  margin-bottom: 6px;
   padding: 8px 12px;
   border-radius: var(--radius-sm);
   color: var(--text-tertiary);
