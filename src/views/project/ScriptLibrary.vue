@@ -2,7 +2,7 @@
 // 剧本库：当前作品的分集剧本工作区
 // 左侧分集目录 + 中间工作区（预览 / 源码 / AI优化）。
 // 「上传剧本」「AI生成」为剧本页内的独立面板视图（独立 VUE 文件）。
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { message, Modal } from 'ant-design-vue'
 import {
   Upload,
@@ -17,11 +17,14 @@ import {
   ScrollText,
   ListTree,
   Download,
+  LoaderCircle,
 } from 'lucide-vue-next'
 import { appState } from '../../store/appState.js'
+import { aiTask } from '../../store/aiTasks.js'
+import { addUsage } from '../../store/usage.js'
 import { api } from '../../services/bridge.js'
 import { genLocalId } from '../../utils/id.js'
-import { renderMarkdown, splitScriptMarkdown, parseCompliance, extractTitle, stripCodeFence } from '../../utils/markdown.js'
+import { renderMarkdown, splitScriptMarkdown } from '../../utils/markdown.js'
 import { optimizeEpisode } from '../../services/ai.js'
 import ScriptUpload from './ScriptUpload.vue'
 import ScriptGenerate from './ScriptGenerate.vue'
@@ -29,6 +32,20 @@ import ScriptGenerate from './ScriptGenerate.vue'
 const project = computed(() => appState.currentProject)
 
 const view = ref('library') // library | upload | generate
+
+// 是否有 AI 任务正在为当前工程运行
+const taskRunningHere = computed(() => aiTask.active && aiTask.projectPath === project.value?.path)
+
+// 任务完成后自动刷新剧本库
+watch(
+  () => aiTask.version,
+  () => {
+    if (aiTask.status === 'done' && aiTask.resultProjectPath === project.value?.path) {
+      view.value = 'library'
+      loadScripts(aiTask.resultScriptId)
+    }
+  },
+)
 
 const scripts = ref([]) // 索引列表
 const current = ref(null) // { meta, overview, episodes }
@@ -300,43 +317,6 @@ async function save() {
   }
 }
 
-// ---------- 上传 / AI生成 面板完成回调：整体放入「总览」 ----------
-async function onPanelComplete(payload) {
-  if (!project.value?.path) return
-  const md = stripCodeFence(payload.fullMarkdown || '')
-  const compliance = parseCompliance(md)
-  const script = {
-    title: payload.title || extractTitle(md, '未命名剧本'),
-    sourceType: payload.sourceType,
-    status: compliance.passed ? '待转化' : '合规失败',
-    episodeDurationSeconds: payload.episodeDurationSeconds,
-    complianceResult: compliance.result,
-    riskLevel: compliance.riskLevel,
-    overview: md,
-    episodes: [],
-  }
-
-  saving.value = true
-  try {
-    const meta = await api.scripts.save({ projectPath: project.value.path, script })
-    await loadScripts(meta.id)
-    activeEpisodeNo.value = null // 定位到总览
-    view.value = 'library'
-    if (!compliance.passed) {
-      message.warning('合规检测未通过，内容已放入总览，请检查后再转化')
-    } else {
-      message.success(
-        (payload.sourceType === 'ai' ? 'AI生成完成' : '标准化完成') +
-          '，内容已放入总览，可在总览「一键转化为项目剧本」',
-      )
-    }
-  } catch (err) {
-    message.error('保存失败：' + err.message)
-  } finally {
-    saving.value = false
-  }
-}
-
 // ---------- 一键转化：从总览解析分集并自动建立 ----------
 async function convertOverviewToEpisodes() {
   if (!current.value) return
@@ -392,12 +372,13 @@ async function runAiOptimize() {
   if (!activeEpisode.value) return
   aiRunning.value = true
   try {
-    const optimized = await optimizeEpisode({
+    const { markdown, usage } = await optimizeEpisode({
       episodeMarkdown: activeEpisode.value.content,
       instruction: aiInstruction.value.trim(),
       modelId: appState.currentModelId,
     })
-    activeEpisode.value.content = optimized
+    if (project.value?.path) addUsage(project.value.path, usage)
+    activeEpisode.value.content = markdown
     dirty.value = true
     mode.value = 'preview'
     message.success('已应用 AI 优化结果，请检查后保存')
@@ -413,8 +394,8 @@ onMounted(() => loadScripts())
 
 <template>
   <!-- 独立面板：上传剧本 / AI生成 -->
-  <ScriptUpload v-if="view === 'upload'" @back="view = 'library'" @complete="onPanelComplete" />
-  <ScriptGenerate v-else-if="view === 'generate'" @back="view = 'library'" @complete="onPanelComplete" />
+  <ScriptUpload v-if="view === 'upload'" @back="view = 'library'" />
+  <ScriptGenerate v-else-if="view === 'generate'" @back="view = 'library'" />
 
   <!-- 剧本库主视图 -->
   <div v-else class="script-library">
@@ -501,8 +482,15 @@ onMounted(() => loadScripts())
 
       <!-- 工作区 -->
       <section class="work-area">
+        <!-- 生成中占位 -->
+        <div v-if="!current && taskRunningHere" class="work-empty">
+          <div class="work-empty-icon"><LoaderCircle :size="30" class="spin" /></div>
+          <h3>正在{{ aiTask.kind === 'ai' ? 'AI生成' : '标准化' }}剧本…</h3>
+          <p>可切换到其他界面，生成完成后会自动出现在这里。</p>
+        </div>
+
         <!-- 空状态 -->
-        <div v-if="!current" class="work-empty">
+        <div v-else-if="!current" class="work-empty">
           <div class="work-empty-icon"><ScrollText :size="30" /></div>
           <h3>开始创作这部作品的剧本</h3>
           <p>你可以新建并手写剧本，或上传外部文档、使用 AI 生成分集剧本。</p>
@@ -835,6 +823,14 @@ onMounted(() => loadScripts())
   justify-content: center;
   color: var(--brand-color);
   background: var(--bg-active);
+}
+.spin {
+  animation: lib-spin 0.9s linear infinite;
+}
+@keyframes lib-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 .work-empty h3 {
   margin: 0 0 8px;

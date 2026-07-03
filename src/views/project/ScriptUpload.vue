@@ -5,15 +5,14 @@ import { message } from 'ant-design-vue'
 import { ArrowLeft, FileUp, FileText, Upload } from 'lucide-vue-next'
 import { api } from '../../services/bridge.js'
 import { appState } from '../../store/appState.js'
-import { standardizeScript } from '../../services/ai.js'
+import { aiTask, startScriptTask } from '../../store/aiTasks.js'
 
-const emit = defineEmits(['back', 'complete'])
+const emit = defineEmits(['back'])
 
 const models = computed(() => appState.settings.models || [])
 const hasModel = computed(() => models.value.length > 0)
 
 const parsing = ref(false)
-const submitting = ref(false)
 const parsed = ref(null) // { fileName, fileType, rawText }
 
 const form = reactive({
@@ -57,32 +56,25 @@ async function chooseFile() {
   }
 }
 
-async function submit() {
+function submit() {
   if (!parsed.value) return message.warning('请先选择并解析文件')
   if (!form.title.trim()) return message.warning('请填写剧本标题')
   if (!hasModel.value) return message.warning('请先在设置页添加模型')
-  submitting.value = true
-  try {
-    const fullMarkdown = await standardizeScript({
+  const res = startScriptTask({
+    kind: 'upload',
+    title: form.title.trim(),
+    params: {
       title: form.title.trim(),
       targetEpisodeCount: form.targetEpisodeCount,
       episodeDurationSeconds: form.episodeDurationSeconds,
       sourceType: 'upload',
       rawText: parsed.value.rawText,
       modelId: form.modelId,
-    })
-    emit('complete', {
-      title: form.title.trim(),
-      sourceType: 'upload',
-      targetEpisodeCount: form.targetEpisodeCount,
-      episodeDurationSeconds: form.episodeDurationSeconds,
-      fullMarkdown,
-    })
-  } catch (err) {
-    message.error('标准化失败：' + err.message)
-  } finally {
-    submitting.value = false
-  }
+    },
+  })
+  if (!res.ok) return message.warning(res.reason)
+  message.success('已开始标准化，可切换到其他界面，完成后会自动放入剧本库')
+  emit('back')
 }
 </script>
 
@@ -162,12 +154,11 @@ async function submit() {
       <a-button @click="emit('back')">返回剧本库</a-button>
       <a-button
         type="primary"
-        :loading="submitting"
-        :disabled="!parsed || !hasModel"
+        :disabled="!parsed || !hasModel || aiTask.active"
         @click="submit"
       >
         <template #icon><Upload :size="15" /></template>
-        开始标准化
+        {{ aiTask.active ? '任务进行中…' : '开始标准化' }}
       </a-button>
     </footer>
   </div>

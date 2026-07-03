@@ -60,6 +60,10 @@ function wrapElectronApi(raw) {
       selectScriptFile: () => raw.dialog.selectScriptFile(),
       exportScript: (payload) => raw.dialog.exportScript(toPlain(payload)),
     },
+    usage: {
+      get: (projectPath) => raw.usage.get(projectPath),
+      add: (payload) => raw.usage.add(toPlain(payload)),
+    },
   }
 }
 
@@ -92,6 +96,21 @@ const fallbackApi = {
     selectProjectDir: desktopOnly('选择工程目录'),
     selectScriptFile: desktopOnly('选择剧本文件'),
     exportScript: desktopOnly('导出剧本'),
+  },
+  usage: {
+    get: async (projectPath) => lsGet('qs_usage_' + projectPath, { totalTokens: 0, promptTokens: 0, completionTokens: 0, requests: 0 }),
+    add: async ({ projectPath, delta }) => {
+      const key = 'qs_usage_' + projectPath
+      const cur = lsGet(key, { totalTokens: 0, promptTokens: 0, completionTokens: 0, requests: 0 })
+      const next = {
+        totalTokens: (cur.totalTokens || 0) + (delta?.totalTokens || 0),
+        promptTokens: (cur.promptTokens || 0) + (delta?.promptTokens || 0),
+        completionTokens: (cur.completionTokens || 0) + (delta?.completionTokens || 0),
+        requests: (cur.requests || 0) + (delta?.requests || 0),
+      }
+      lsSet(key, next)
+      return next
+    },
   },
 }
 

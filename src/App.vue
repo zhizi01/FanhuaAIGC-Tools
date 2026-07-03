@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { theme } from 'ant-design-vue'
 import zhCN from 'ant-design-vue/es/locale/zh_CN'
 import { appState, computeIsDark } from './store/appState.js'
+import AiTaskIndicator from './components/AiTaskIndicator.vue'
 
 const themeConfig = computed(() => {
   const appearance = appState.settings.appearance
@@ -21,6 +22,7 @@ const themeConfig = computed(() => {
   <a-config-provider :locale="zhCN" :theme="themeConfig">
     <a-app class="app-root">
       <router-view />
+      <AiTaskIndicator />
     </a-app>
   </a-config-provider>
 </template>

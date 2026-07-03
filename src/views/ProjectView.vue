@@ -1,8 +1,9 @@
 <script setup>
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { FolderKanban, ScrollText, Users, Package, Film, LogOut, Settings } from 'lucide-vue-next'
+import { FolderKanban, ScrollText, Users, Package, Film, LogOut, Settings, Coins } from 'lucide-vue-next'
 import { appState, restoreCurrentProject } from '../store/appState.js'
+import { usage, loadUsage, formatTokens } from '../store/usage.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -32,7 +33,15 @@ function openSettings() {
 
 onMounted(() => {
   restoreCurrentProject()
+  loadUsage(project.value?.path)
 })
+
+watch(
+  () => project.value?.path,
+  (p) => {
+    if (p) loadUsage(p)
+  },
+)
 </script>
 
 <template>
@@ -73,6 +82,24 @@ onMounted(() => {
           <span>返回主菜单</span>
         </button>
       </div>
+
+      <!-- 左下角：Token 用量（默认简展示，悬停出详情） -->
+      <a-popover placement="topLeft" trigger="hover">
+        <template #content>
+          <div class="usage-pop">
+            <div class="usage-pop-title">本工程 Token 用量</div>
+            <div class="usage-pop-row"><span>总消耗</span><b>{{ usage.totalTokens.toLocaleString() }}</b></div>
+            <div class="usage-pop-row"><span>输入</span><b>{{ usage.promptTokens.toLocaleString() }}</b></div>
+            <div class="usage-pop-row"><span>输出</span><b>{{ usage.completionTokens.toLocaleString() }}</b></div>
+            <div class="usage-pop-row"><span>请求次数</span><b>{{ usage.requests }}</b></div>
+          </div>
+        </template>
+        <div class="side-usage">
+          <Coins :size="15" />
+          <span class="usage-num">{{ formatTokens(usage.totalTokens) }}</span>
+          <span class="usage-unit">tokens</span>
+        </div>
+      </a-popover>
     </aside>
 
     <div class="project-work">
@@ -219,11 +246,61 @@ onMounted(() => {
   color: var(--brand-color);
 }
 
+/* 左下角 Token 用量 */
+.side-usage {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  font-size: 12px;
+  cursor: default;
+  transition: background 0.16s ease, color 0.16s ease;
+}
+.side-usage:hover {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+.usage-num {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.usage-unit {
+  opacity: 0.8;
+}
+
 .project-work {
   flex: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+}
+</style>
+
+<style>
+/* 用量气泡内容随 a-popover 传送到 body，需使用非 scoped 样式 */
+.usage-pop {
+  min-width: 190px;
+}
+.usage-pop-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+.usage-pop-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 3px 0;
+}
+.usage-pop-row b {
+  color: var(--text-primary);
+  font-weight: 600;
 }
 </style>

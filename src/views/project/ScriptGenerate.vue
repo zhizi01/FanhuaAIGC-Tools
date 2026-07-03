@@ -1,19 +1,18 @@
 <script setup>
 // AI生成剧本：独立面板视图。填写创作参数 -> 调用模型生成整套分集剧本 Markdown
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive } from 'vue'
 import { message } from 'ant-design-vue'
 import { ArrowLeft, Sparkles } from 'lucide-vue-next'
 import { appState } from '../../store/appState.js'
-import { generateScript } from '../../services/ai.js'
+import { aiTask, startScriptTask } from '../../store/aiTasks.js'
 
-const emit = defineEmits(['back', 'complete'])
+const emit = defineEmits(['back'])
 
 const models = computed(() => appState.settings.models || [])
 const hasModel = computed(() => models.value.length > 0)
 
 const GENRES = ['都市', '玄幻', '悬疑', '校园', '古风', '科幻', '言情', '热血']
 
-const submitting = ref(false)
 const form = reactive({
   title: '',
   genre: '都市',
@@ -34,13 +33,14 @@ onMounted(() => {
   form.modelId = def ? def.id : null
 })
 
-async function submit() {
+function submit() {
   if (!form.title.trim()) return message.warning('请填写剧本标题')
   if (!form.idea.trim()) return message.warning('请填写一句话创意')
   if (!hasModel.value) return message.warning('请先在设置页添加模型')
-  submitting.value = true
-  try {
-    const fullMarkdown = await generateScript({
+  const res = startScriptTask({
+    kind: 'ai',
+    title: form.title.trim(),
+    params: {
       title: form.title.trim(),
       genre: form.genre,
       idea: form.idea.trim(),
@@ -50,19 +50,11 @@ async function submit() {
       episodeDurationSeconds: form.episodeDurationSeconds,
       style: form.style.trim(),
       modelId: form.modelId,
-    })
-    emit('complete', {
-      title: form.title.trim(),
-      sourceType: 'ai',
-      targetEpisodeCount: form.targetEpisodeCount,
-      episodeDurationSeconds: form.episodeDurationSeconds,
-      fullMarkdown,
-    })
-  } catch (err) {
-    message.error('生成失败：' + err.message)
-  } finally {
-    submitting.value = false
-  }
+    },
+  })
+  if (!res.ok) return message.warning(res.reason)
+  message.success('已开始AI生成，可切换到其他界面，完成后会自动放入剧本库')
+  emit('back')
 }
 </script>
 
@@ -142,9 +134,9 @@ async function submit() {
 
     <footer class="panel-foot">
       <a-button @click="emit('back')">返回剧本库</a-button>
-      <a-button type="primary" :loading="submitting" :disabled="!hasModel" @click="submit">
+      <a-button type="primary" :disabled="!hasModel || aiTask.active" @click="submit">
         <template #icon><Sparkles :size="15" /></template>
-        开始生成
+        {{ aiTask.active ? '任务进行中…' : '开始生成' }}
       </a-button>
     </footer>
   </div>

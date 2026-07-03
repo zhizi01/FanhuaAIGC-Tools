@@ -28,4 +28,9 @@ contextBridge.exposeInMainWorld('api', {
     selectScriptFile: () => ipcRenderer.invoke('dialog:selectScriptFile'),
     exportScript: (payload) => ipcRenderer.invoke('dialog:exportScript', payload),
   },
+  // 工程 Token 用量
+  usage: {
+    get: (projectPath) => ipcRenderer.invoke('usage:get', projectPath),
+    add: (payload) => ipcRenderer.invoke('usage:add', payload),
+  },
 })
