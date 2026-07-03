@@ -61,9 +61,17 @@ function wrapElectronApi(raw) {
       save: (payload) => raw.roles.save(toPlain(payload)),
       remove: (payload) => raw.roles.remove(toPlain(payload)),
     },
+    assets: {
+      list: (projectPath) => raw.assets.list(projectPath),
+      read: (payload) => raw.assets.read(toPlain(payload)),
+      save: (payload) => raw.assets.save(toPlain(payload)),
+      remove: (payload) => raw.assets.remove(toPlain(payload)),
+      import: (payload) => raw.assets.import(toPlain(payload)),
+    },
     dialog: {
       selectProjectDir: () => raw.dialog.selectProjectDir(),
       selectScriptFile: () => raw.dialog.selectScriptFile(),
+      selectAssetFiles: () => raw.dialog.selectAssetFiles(),
       exportScript: (payload) => raw.dialog.exportScript(toPlain(payload)),
     },
     usage: {
@@ -104,9 +112,17 @@ const fallbackApi = {
     save: desktopOnly('保存角色'),
     remove: desktopOnly('删除角色'),
   },
+  assets: {
+    list: async () => [],
+    read: desktopOnly('读取资产'),
+    save: desktopOnly('保存资产'),
+    remove: desktopOnly('删除资产'),
+    import: desktopOnly('导入资产'),
+  },
   dialog: {
     selectProjectDir: desktopOnly('选择工程目录'),
     selectScriptFile: desktopOnly('选择剧本文件'),
+    selectAssetFiles: desktopOnly('选择资产文件'),
     exportScript: desktopOnly('导出剧本'),
   },
   usage: {

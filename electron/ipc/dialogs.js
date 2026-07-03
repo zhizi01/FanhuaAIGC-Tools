@@ -23,6 +23,28 @@ export function registerDialogsIpc(getWindow) {
     return { path: res.filePaths[0], name: path.basename(res.filePaths[0]) }
   })
 
+  // 选择资产文件（多选）
+  ipcMain.handle('dialog:selectAssetFiles', async () => {
+    const res = await dialog.showOpenDialog(getWindow(), {
+      title: '导入资产',
+      properties: ['openFile', 'multiSelections'],
+      filters: [
+        {
+          name: '素材文件',
+          extensions: [
+            'png', 'jpg', 'jpeg', 'webp', 'gif',
+            'mp3', 'wav', 'm4a',
+            'mp4', 'mov', 'webm',
+            'txt', 'md', 'docx', 'pdf',
+          ],
+        },
+        { name: '全部文件', extensions: ['*'] },
+      ],
+    })
+    if (res.canceled || !res.filePaths.length) return []
+    return res.filePaths
+  })
+
   // 导出剧本：弹出保存对话框并写入文件
   ipcMain.handle('dialog:exportScript', async (_e, payload) => {
     const { defaultName, content } = payload || {}

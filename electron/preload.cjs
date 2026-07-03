@@ -29,10 +29,19 @@ contextBridge.exposeInMainWorld('api', {
     save: (payload) => ipcRenderer.invoke('roles:save', payload),
     remove: (payload) => ipcRenderer.invoke('roles:remove', payload),
   },
+  // 资产库
+  assets: {
+    list: (projectPath) => ipcRenderer.invoke('assets:list', projectPath),
+    read: (payload) => ipcRenderer.invoke('assets:read', payload),
+    save: (payload) => ipcRenderer.invoke('assets:save', payload),
+    remove: (payload) => ipcRenderer.invoke('assets:remove', payload),
+    import: (payload) => ipcRenderer.invoke('assets:import', payload),
+  },
   // 系统对话框
   dialog: {
     selectProjectDir: () => ipcRenderer.invoke('dialog:selectProjectDir'),
     selectScriptFile: () => ipcRenderer.invoke('dialog:selectScriptFile'),
+    selectAssetFiles: () => ipcRenderer.invoke('dialog:selectAssetFiles'),
     exportScript: (payload) => ipcRenderer.invoke('dialog:exportScript', payload),
   },
   // 工程 Token 用量

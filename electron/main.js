@@ -1,14 +1,24 @@
-import { app, BrowserWindow, Menu } from 'electron'
+import { app, BrowserWindow, Menu, protocol, net } from 'electron'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { registerSettingsIpc } from './ipc/settings.js'
 import { registerProjectsIpc } from './ipc/projects.js'
 import { registerScriptsIpc } from './ipc/scripts.js'
 import { registerDialogsIpc } from './ipc/dialogs.js'
 import { registerUsageIpc } from './ipc/usage.js'
 import { registerRolesIpc } from './ipc/roles.js'
+import { registerAssetsIpc } from './ipc/assets.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
+// 自定义协议：用于在渲染进程安全预览工程内的本地资产文件
+// （dev 环境页面运行在 http 源下，file:// 会被拦截，这里用 qsasset:// 转发）
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'qsasset',
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true },
+  },
+])
 
 // 开发环境由 electron/dev.js 注入 Vite 开发服务器地址
 const devServerUrl = process.env.VITE_DEV_SERVER_URL
@@ -62,11 +72,24 @@ function registerIpc() {
   registerDialogsIpc(() => mainWindow)
   registerUsageIpc()
   registerRolesIpc()
+  registerAssetsIpc()
 }
 
 app.whenReady().then(() => {
   // 移除应用顶部菜单栏（返回起始页/设置等改由界面内按钮承担）
   Menu.setApplicationMenu(null)
+
+  // qsasset://local/<encodeURIComponent(绝对路径)> -> 本地文件
+  protocol.handle('qsasset', (request) => {
+    try {
+      const encoded = request.url.slice('qsasset://local/'.length)
+      const filePath = path.normalize(decodeURIComponent(encoded))
+      return net.fetch(pathToFileURL(filePath).toString())
+    } catch {
+      return new Response('Not Found', { status: 404 })
+    }
+  })
+
   registerIpc()
   createWindow()
 
