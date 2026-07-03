@@ -4,7 +4,7 @@ import { api } from '../services/bridge.js'
 
 export const appState = reactive({
   settings: {
-    appearance: { themeMode: 'dark', primaryColor: '#1ec9b0', density: 'comfortable' },
+    appearance: { themeMode: 'dark', primaryColor: '#1ec9b0', density: 'comfortable', background: 'grid' },
     models: [],
   },
   currentProject: null,
@@ -45,6 +45,7 @@ export function applyAppearance(appearance) {
   const dark = computeIsDark(appearance)
   root.setAttribute('data-theme', dark ? 'dark' : 'light')
   root.setAttribute('data-density', appearance?.density || 'comfortable')
+  root.setAttribute('data-bg', appearance?.background || 'grid')
 
   const brand = appearance?.primaryColor || '#1ec9b0'
   root.style.setProperty('--brand-color', brand)

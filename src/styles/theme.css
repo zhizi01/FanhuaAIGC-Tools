@@ -27,6 +27,12 @@
   --shadow-lg: 0 12px 32px rgba(16, 24, 40, 0.12);
   --shadow-pop: 0 8px 28px rgba(16, 24, 40, 0.16);
 
+  /* 背景纹理（可在设置中切换：无 / 网格 / 点阵 / 光晕） */
+  --pattern-color: rgba(16, 24, 40, 0.05);
+  --pattern-glow: rgba(30, 201, 176, 0.1);
+  --bg-pattern: none;
+  --bg-pattern-size: 22px 22px;
+
   --radius-xs: 6px;
   --radius-sm: 8px;
   --radius-md: 12px;
@@ -66,10 +72,29 @@
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35), 0 10px 30px rgba(0, 0, 0, 0.45);
   --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.55);
   --shadow-pop: 0 10px 34px rgba(0, 0, 0, 0.6);
+
+  --pattern-color: rgba(255, 255, 255, 0.04);
+  --pattern-glow: rgba(34, 211, 187, 0.1);
 }
 
 [data-density='compact'] {
   --space-unit: 10px;
   --control-height: 32px;
   --sidebar-width: 208px;
+}
+
+/* 背景纹理变体：由根节点 data-bg 属性切换 */
+[data-bg='grid'] {
+  --bg-pattern: linear-gradient(var(--pattern-color) 1px, transparent 1px),
+    linear-gradient(90deg, var(--pattern-color) 1px, transparent 1px);
+  --bg-pattern-size: 22px 22px;
+}
+[data-bg='dots'] {
+  --bg-pattern: radial-gradient(var(--pattern-color) 1.3px, transparent 1.4px);
+  --bg-pattern-size: 20px 20px;
+}
+[data-bg='glow'] {
+  --bg-pattern: radial-gradient(60% 55% at 12% 0%, var(--pattern-glow), transparent 60%),
+    radial-gradient(55% 50% at 100% 100%, var(--pattern-glow), transparent 55%);
+  --bg-pattern-size: 100% 100%;
 }

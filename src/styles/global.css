@@ -16,7 +16,11 @@ body {
     sans-serif;
   font-size: 14px;
   color: var(--text-primary);
-  background: var(--bg-app);
+  background-color: var(--bg-app);
+  background-image: var(--bg-pattern);
+  background-size: var(--bg-pattern-size);
+  background-position: 0 0;
+  background-repeat: repeat;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   overflow: hidden;

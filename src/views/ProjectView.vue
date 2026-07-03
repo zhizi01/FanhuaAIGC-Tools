@@ -85,7 +85,7 @@ onMounted(() => {
 .project-shell {
   display: flex;
   height: 100%;
-  background: var(--bg-app);
+  background: transparent;
 }
 
 .project-side {

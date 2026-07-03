@@ -9,6 +9,7 @@ const DEFAULTS = {
     themeMode: 'dark', // light | dark | system
     primaryColor: '#1ec9b0',
     density: 'comfortable', // comfortable | compact
+    background: 'grid', // none | grid | dots | glow
   },
   models: [],
 }

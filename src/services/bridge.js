@@ -7,7 +7,7 @@ const LS_SETTINGS = 'qs_settings'
 const LS_RECENT = 'qs_recent_projects'
 
 const DEFAULT_SETTINGS = {
-  appearance: { themeMode: 'dark', primaryColor: '#1ec9b0', density: 'comfortable' },
+  appearance: { themeMode: 'dark', primaryColor: '#1ec9b0', density: 'comfortable', background: 'grid' },
   models: [],
 }
 

@@ -155,7 +155,7 @@ async function submit() {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--bg-app);
+  background: transparent;
 }
 
 .panel-head {

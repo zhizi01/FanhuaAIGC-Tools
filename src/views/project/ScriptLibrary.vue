@@ -170,13 +170,10 @@ function selectEpisode(no) {
   aiInstruction.value = ''
 }
 
-function switchScript(id) {
-  if (id === activeScriptId.value) return
-  guardDirty(() => loadScript(id))
-}
-
 // ---------- 新建 / 增删 ----------
+// 单剧本约束：一个工程仅允许存在一个剧本
 function newScript() {
+  if (current.value) return message.warning('一个工程仅允许一个剧本，如需重建请先删除当前剧本')
   guardDirty(() => {
     const now = new Date().toISOString()
     current.value = {
@@ -416,15 +413,7 @@ onMounted(() => loadScripts())
         </template>
       </div>
       <div class="toolbar-right">
-        <a-button @click="view = 'upload'">
-          <template #icon><Upload :size="15" /></template>
-          上传剧本
-        </a-button>
-        <a-button @click="view = 'generate'">
-          <template #icon><Sparkles :size="15" /></template>
-          AI生成
-        </a-button>
-        <a-button type="primary" :loading="saving" :disabled="!current || !dirty" @click="save">
+        <a-button v-if="current" type="primary" :loading="saving" :disabled="!dirty" @click="save">
           <template #icon><Save :size="15" /></template>
           保存
         </a-button>
@@ -432,23 +421,9 @@ onMounted(() => loadScripts())
     </header>
 
     <div class="lib-body">
-      <!-- 分集目录 -->
-      <aside class="episode-nav">
-        <div class="nav-top">
-          <a-select
-            v-if="scripts.length"
-            :value="activeScriptId"
-            class="script-select"
-            size="small"
-            :options="scripts.map((s) => ({ value: s.id, label: s.title }))"
-            @change="switchScript"
-          />
-          <a-button size="small" type="text" title="新建剧本" class="new-script-btn" @click="newScript">
-            <Plus :size="16" />
-          </a-button>
-        </div>
-
-        <div v-if="current" class="nav-scroll">
+      <!-- 分集目录（单剧本，无顶部新建区） -->
+      <aside v-if="current" class="episode-nav">
+        <div class="nav-scroll">
           <div class="nav-label">分集目录</div>
           <div class="nav-item" :class="{ active: isOverview }" @click="selectOverview">
             <FileText :size="15" />
@@ -465,12 +440,14 @@ onMounted(() => loadScripts())
             <span class="ep-title">{{ ep.title }}</span>
             <Trash2 :size="14" class="ep-del" title="删除该集" @click.stop="removeEpisode(ep.episodeNo)" />
           </div>
-          <div v-if="!episodes.length" class="nav-empty">尚无分集</div>
+          <div v-if="!episodes.length" class="nav-empty">尚无分集，点击下方新增</div>
+        </div>
 
+        <!-- 底部固定操作 -->
+        <div class="nav-foot">
           <button class="add-ep-btn" @click="addEpisode">
-            <Plus :size="14" /> 新增一集
+            <Plus :size="15" /> 新增剧集
           </button>
-
           <button class="remove-script-btn" @click="removeScript">
             <Trash2 :size="13" /> 删除当前剧本
           </button>
@@ -652,20 +629,6 @@ onMounted(() => loadScripts())
   flex-direction: column;
   min-height: 0;
 }
-.nav-top {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 12px 12px;
-  border-bottom: 1px solid var(--border-color);
-}
-.script-select {
-  flex: 1;
-  min-width: 0;
-}
-.new-script-btn {
-  color: var(--text-secondary);
-}
 .nav-scroll {
   flex: 1;
   overflow-y: auto;
@@ -741,26 +704,34 @@ onMounted(() => loadScripts())
   font-size: 12px;
   color: var(--text-tertiary);
 }
+/* 底部固定操作区 */
+.nav-foot {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border-color);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
 .add-ep-btn {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
   width: 100%;
-  margin-top: 10px;
-  padding: 9px;
-  border: 1px dashed var(--border-strong);
+  padding: 10px;
+  border: 1px solid var(--brand-color);
   border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-secondary);
+  background: var(--brand-soft);
+  color: var(--brand-color);
   font-size: 13px;
+  font-weight: 600;
   cursor: pointer;
   transition: all 0.14s ease;
 }
 .add-ep-btn:hover {
-  color: var(--brand-color);
-  border-color: var(--brand-color);
-  background: var(--brand-soft);
+  background: var(--brand-color);
+  color: var(--text-onbrand);
 }
 .remove-script-btn {
   display: flex;
@@ -768,8 +739,7 @@ onMounted(() => loadScripts())
   justify-content: center;
   gap: 6px;
   width: 100%;
-  margin-top: 18px;
-  padding: 8px;
+  padding: 7px;
   border: none;
   background: transparent;
   color: var(--text-tertiary);
@@ -789,7 +759,7 @@ onMounted(() => loadScripts())
   display: flex;
   min-width: 0;
   overflow: hidden;
-  background: var(--bg-app);
+  background: transparent;
 }
 .work-empty {
   margin: auto;

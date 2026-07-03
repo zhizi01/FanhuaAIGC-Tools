@@ -8,6 +8,12 @@ import { genLocalId } from '../utils/id.js'
 
 const router = useRouter()
 
+// 返回来源页：从工程内进入则回到工程，从起始页进入则回到起始页
+function goBack() {
+  if (window.history.length > 1) router.back()
+  else router.push('/')
+}
+
 const PRESET_COLORS = ['#1ec9b0', '#13c2c2', '#1677ff', '#722ed1', '#52c41a', '#fa8c16', '#eb2f96']
 const MAX_CONTEXT = 1000000
 
@@ -138,7 +144,7 @@ function formatContext(size) {
 <template>
   <div class="settings-view">
     <header class="settings-header">
-      <a-button type="text" class="back-btn" @click="router.push('/')">
+      <a-button type="text" class="back-btn" @click="goBack">
         <template #icon><ArrowLeft :size="18" /></template>
         返回
       </a-button>
@@ -195,6 +201,23 @@ function formatContext(size) {
               { label: '紧凑', value: 'compact' },
             ]"
             @change="(v) => updateAppearance({ density: v })"
+          />
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-label">
+            <div class="label-title">背景纹理</div>
+            <div class="label-desc">为工作区背景增加网格、点阵或光晕质感</div>
+          </div>
+          <a-segmented
+            :value="appearance.background || 'grid'"
+            :options="[
+              { label: '无', value: 'none' },
+              { label: '网格', value: 'grid' },
+              { label: '点阵', value: 'dots' },
+              { label: '光晕', value: 'glow' },
+            ]"
+            @change="(v) => updateAppearance({ background: v })"
           />
         </div>
       </section>
@@ -291,7 +314,7 @@ function formatContext(size) {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--bg-app);
+  background: transparent;
 }
 .settings-header {
   display: flex;

@@ -133,40 +133,42 @@ onMounted(loadRecent)
     </aside>
 
     <main class="start-main">
-      <header class="main-header">
-        <h2>最近工程</h2>
-        <span class="main-count" v-if="recentProjects.length">{{ recentProjects.length }} 个工程</span>
-      </header>
+      <div class="start-main-inner">
+        <header class="main-header">
+          <h2>最近工程</h2>
+          <span class="main-count" v-if="recentProjects.length">{{ recentProjects.length }} 个工程</span>
+        </header>
 
-      <a-spin :spinning="loading">
-        <div v-if="recentProjects.length" class="project-list">
-          <div
-            v-for="item in recentProjects"
-            :key="item.id"
-            class="project-card"
-            @click="openFromRecent(item)"
-          >
-            <div class="project-avatar">{{ (item.name || '?').slice(0, 1) }}</div>
-            <div class="project-info">
-              <div class="project-name">{{ item.name }}</div>
-              <div class="project-path" :title="item.path">{{ item.path }}</div>
-            </div>
-            <div class="project-meta">
-              <span class="project-time"><Clock :size="13" /> {{ formatTime(item.lastOpenedAt) }}</span>
-            </div>
-            <a-button
-              type="text"
-              class="project-remove"
-              title="从列表移除"
-              @click.stop="removeRecent(item)"
+        <a-spin :spinning="loading">
+          <div v-if="recentProjects.length" class="project-list">
+            <div
+              v-for="item in recentProjects"
+              :key="item.id"
+              class="project-card"
+              @click="openFromRecent(item)"
             >
-              <Trash2 :size="15" />
-            </a-button>
+              <div class="project-avatar">{{ (item.name || '?').slice(0, 1) }}</div>
+              <div class="project-info">
+                <div class="project-name">{{ item.name }}</div>
+                <div class="project-path" :title="item.path">{{ item.path }}</div>
+              </div>
+              <div class="project-meta">
+                <span class="project-time"><Clock :size="13" /> {{ formatTime(item.lastOpenedAt) }}</span>
+              </div>
+              <a-button
+                type="text"
+                class="project-remove"
+                title="从列表移除"
+                @click.stop="removeRecent(item)"
+              >
+                <Trash2 :size="15" />
+              </a-button>
+            </div>
           </div>
-        </div>
 
-        <a-empty v-else description="还没有工程，点击左侧「新建工程」开始创作" class="empty-block" />
-      </a-spin>
+          <a-empty v-else description="还没有工程，点击左侧「新建工程」开始创作" class="empty-block" />
+        </a-spin>
+      </div>
     </main>
 
     <a-modal
@@ -212,7 +214,7 @@ onMounted(loadRecent)
 .start-view {
   display: flex;
   height: 100%;
-  background: var(--bg-app);
+  background: transparent;
 }
 
 .start-sidebar {
@@ -272,18 +274,24 @@ onMounted(loadRecent)
 
 .start-main {
   flex: 1;
-  padding: 32px 40px;
+  padding: 48px 40px;
   overflow-y: auto;
+}
+.start-main-inner {
+  max-width: 760px;
+  margin: 0 auto;
 }
 .main-header {
   display: flex;
   align-items: baseline;
+  justify-content: center;
   gap: 12px;
-  margin-bottom: 20px;
+  margin-bottom: 24px;
 }
 .main-header h2 {
   margin: 0;
   font-size: 20px;
+  font-weight: 700;
   color: var(--text-primary);
 }
 .main-count {
@@ -295,7 +303,6 @@ onMounted(loadRecent)
   display: flex;
   flex-direction: column;
   gap: 12px;
-  max-width: 900px;
 }
 .project-card {
   display: flex;
