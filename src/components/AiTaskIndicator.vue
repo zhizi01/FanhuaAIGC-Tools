@@ -1,72 +1,140 @@
 <script setup>
-// 全局 AI 任务状态浮标：运行中/完成/失败，跨界面常驻
+// 全局 AI 任务状态浮标：剧本生成/标准化、角色提取/补全，运行中/完成/失败，跨界面常驻
 import { computed, watch, onBeforeUnmount } from 'vue'
 import { LoaderCircle, CheckCircle2, AlertCircle, X } from 'lucide-vue-next'
 import { useAiTaskStore } from '../store/aiTasks.js'
+import { useRoleTaskStore } from '../store/roleTasks.js'
 
 const aiTask = useAiTaskStore()
+const roleTask = useRoleTaskStore()
 
-const visible = computed(() => aiTask.status !== 'idle')
-
+// ---------- 剧本任务 ----------
+const aiVisible = computed(() => aiTask.status !== 'idle')
 const kindLabel = computed(() => (aiTask.kind === 'ai' ? 'AI生成' : '标准化'))
 
-let timer = null
+// ---------- 角色任务 ----------
+const roleVisible = computed(() => roleTask.status !== 'idle')
+const roleKindLabel = computed(() => (roleTask.kind === 'extract' ? '提取角色' : '补全角色'))
+const roleTitle = computed(() => {
+  if (roleTask.status === 'running') return `正在AI${roleKindLabel.value}…`
+  if (roleTask.status === 'done') return roleTask.kind === 'extract' ? '角色提取完成' : '角色补全完成'
+  return roleTask.kind === 'extract' ? '角色提取失败' : '角色补全失败'
+})
+const roleDesc = computed(() => {
+  if (roleTask.status === 'error') return roleTask.error
+  if (roleTask.kind === 'extract') {
+    if (roleTask.status === 'done') {
+      return roleTask.extractCount
+        ? `识别到 ${roleTask.extractCount} 个角色，进入角色库确认导入`
+        : '未识别到角色，可手动新建'
+    }
+    return '正在从当前剧本分析角色…'
+  }
+  return roleTask.roleName ? `角色：${roleTask.roleName}` : ''
+})
+
+let aiTimer = null
+let roleTimer = null
+
 watch(
   () => aiTask.status,
   (s) => {
-    if (timer) {
-      clearTimeout(timer)
-      timer = null
+    if (aiTimer) {
+      clearTimeout(aiTimer)
+      aiTimer = null
     }
     // 完成/失败后自动隐藏
-    if (s === 'done') timer = setTimeout(() => aiTask.dismiss(), 6000)
-    if (s === 'error') timer = setTimeout(() => aiTask.dismiss(), 10000)
+    if (s === 'done') aiTimer = setTimeout(() => aiTask.dismiss(), 6000)
+    if (s === 'error') aiTimer = setTimeout(() => aiTask.dismiss(), 10000)
+  },
+)
+
+watch(
+  () => roleTask.status,
+  (s) => {
+    if (roleTimer) {
+      clearTimeout(roleTimer)
+      roleTimer = null
+    }
+    // 自动隐藏浮标；提取结果草稿仍保留在 store，回到角色库仍可确认导入
+    if (s === 'done') roleTimer = setTimeout(() => roleTask.dismiss(), 8000)
+    if (s === 'error') roleTimer = setTimeout(() => roleTask.dismiss(), 10000)
   },
 )
 
 onBeforeUnmount(() => {
-  if (timer) clearTimeout(timer)
+  if (aiTimer) clearTimeout(aiTimer)
+  if (roleTimer) clearTimeout(roleTimer)
 })
 
-function close() {
-  if (timer) clearTimeout(timer)
+function closeAi() {
+  if (aiTimer) clearTimeout(aiTimer)
   aiTask.dismiss()
+}
+function closeRole() {
+  if (roleTimer) clearTimeout(roleTimer)
+  roleTask.dismiss()
 }
 </script>
 
 <template>
-  <transition name="fade-up">
-    <div v-if="visible" class="ai-indicator" :class="aiTask.status">
-      <div class="ai-ico">
-        <LoaderCircle v-if="aiTask.status === 'running'" :size="20" class="spin" />
-        <CheckCircle2 v-else-if="aiTask.status === 'done'" :size="20" />
-        <AlertCircle v-else :size="20" />
-      </div>
-      <div class="ai-body">
-        <div class="ai-title">
-          <template v-if="aiTask.status === 'running'">正在{{ kindLabel }}剧本…</template>
-          <template v-else-if="aiTask.status === 'done'">剧本已生成</template>
-          <template v-else>生成失败</template>
+  <div class="ai-indicator-stack">
+    <transition name="fade-up">
+      <div v-if="aiVisible" class="ai-indicator" :class="aiTask.status">
+        <div class="ai-ico">
+          <LoaderCircle v-if="aiTask.status === 'running'" :size="20" class="spin" />
+          <CheckCircle2 v-else-if="aiTask.status === 'done'" :size="20" />
+          <AlertCircle v-else :size="20" />
         </div>
-        <div class="ai-desc">
-          <template v-if="aiTask.status === 'error'">{{ aiTask.error }}</template>
-          <template v-else>《{{ aiTask.title }}》· {{ aiTask.projectName }}</template>
+        <div class="ai-body">
+          <div class="ai-title">
+            <template v-if="aiTask.status === 'running'">正在{{ kindLabel }}剧本…</template>
+            <template v-else-if="aiTask.status === 'done'">剧本已生成</template>
+            <template v-else>生成失败</template>
+          </div>
+          <div class="ai-desc">
+            <template v-if="aiTask.status === 'error'">{{ aiTask.error }}</template>
+            <template v-else>《{{ aiTask.title }}》· {{ aiTask.projectName }}</template>
+          </div>
+          <div v-if="aiTask.status === 'done'" class="ai-hint">已放入总览，可在剧本库「一键转化为项目剧本」</div>
         </div>
-        <div v-if="aiTask.status === 'done'" class="ai-hint">已放入总览，可在剧本库「一键转化为项目剧本」</div>
+        <button v-if="aiTask.status !== 'running'" class="ai-close" @click="closeAi">
+          <X :size="15" />
+        </button>
       </div>
-      <button v-if="aiTask.status !== 'running'" class="ai-close" @click="close">
-        <X :size="15" />
-      </button>
-    </div>
-  </transition>
+    </transition>
+
+    <transition name="fade-up">
+      <div v-if="roleVisible" class="ai-indicator" :class="roleTask.status">
+        <div class="ai-ico">
+          <LoaderCircle v-if="roleTask.status === 'running'" :size="20" class="spin" />
+          <CheckCircle2 v-else-if="roleTask.status === 'done'" :size="20" />
+          <AlertCircle v-else :size="20" />
+        </div>
+        <div class="ai-body">
+          <div class="ai-title">{{ roleTitle }}</div>
+          <div class="ai-desc">{{ roleDesc }}</div>
+        </div>
+        <button v-if="roleTask.status !== 'running'" class="ai-close" @click="closeRole">
+          <X :size="15" />
+        </button>
+      </div>
+    </transition>
+  </div>
 </template>
 
 <style scoped>
-.ai-indicator {
+.ai-indicator-stack {
   position: fixed;
   right: 20px;
   bottom: 20px;
   z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+}
+.ai-indicator {
   width: 340px;
   display: flex;
   align-items: flex-start;

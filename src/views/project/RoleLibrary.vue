@@ -5,16 +5,12 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { message, Modal } from 'ant-design-vue'
 import { Users, Plus, Sparkles, Save, Trash2, Search, ImagePlus, Wand2, X, LoaderCircle } from 'lucide-vue-next'
 import { useAppStore } from '../../store/appState.js'
-import { useUsageStore } from '../../store/usage.js'
 import { useRoleTaskStore } from '../../store/roleTasks.js'
 import { api } from '../../services/bridge.js'
 import { genLocalId } from '../../utils/id.js'
-import { parseExtractedRoles } from '../../utils/markdown.js'
 import { assetUrl } from '../../utils/asset.js'
-import { extractRolesFromScript } from '../../services/ai.js'
 
 const appStore = useAppStore()
-const usageStore = useUsageStore()
 const roleTask = useRoleTaskStore()
 const project = computed(() => appStore.currentProject)
 
@@ -158,7 +154,7 @@ async function aiComplete() {
 watch(
   () => roleTask.version,
   async () => {
-    if (roleTask.status === 'done') {
+    if (roleTask.status === 'done' && roleTask.kind === 'complete') {
       await loadRoles()
       if (roleTask.resultRoleId && roleTask.resultRoleId === activeRoleId.value) {
         try {
@@ -170,8 +166,10 @@ watch(
         }
       }
       message.success('AI 补全完成')
+    } else if (roleTask.status === 'done' && roleTask.kind === 'extract') {
+      openExtractResult()
     } else if (roleTask.status === 'error') {
-      message.error('AI 补全失败：' + roleTask.error)
+      message.error((roleTask.kind === 'extract' ? 'AI提取角色失败：' : 'AI 补全失败：') + roleTask.error)
     }
   },
 )
@@ -286,44 +284,28 @@ function removeRole() {
   })
 }
 
-// ---------- AI 提取角色 ----------
-const extracting = ref(false)
+// ---------- AI 提取角色（后台运行，切换界面不中断） ----------
 const extractOpen = ref(false)
 const importingRoles = ref(false)
 const extractRoles = ref([])
 
-async function aiExtract() {
+function aiExtract() {
   if (!project.value?.path) return
   if (!(appStore.settings.models || []).length) return message.warning('请先在设置页添加模型')
-  extracting.value = true
-  try {
-    const list = await api.scripts.list(project.value.path)
-    if (!list.length) {
-      message.warning('当前工程还没有剧本，请先在剧本库创建')
-      return
-    }
-    const data = await api.scripts.read({ projectPath: project.value.path, scriptId: list[0].id })
-    const parts = [data.overview || '']
-    ;(data.episodes || []).forEach((e) => parts.push(e.content || ''))
-    const scriptText = parts.filter(Boolean).join('\n\n').slice(0, 20000)
-    const { markdown, usage } = await extractRolesFromScript({
-      scriptText,
-      modelId: appStore.currentModelId,
-    })
-    usageStore.add(project.value.path, usage)
+  const res = roleTask.extractRoles({ projectPath: project.value.path })
+  if (!res.ok) return message.warning(res.reason)
+  message.success('已开始 AI 提取角色（后台进行，可切换界面）')
+}
 
-    const drafts = parseExtractedRoles(markdown)
-    if (!drafts.length) {
-      message.warning('未能自动识别角色，请手动新建角色')
-      return
-    }
-    extractRoles.value = drafts.map((d) => ({ ...d, checked: true }))
-    extractOpen.value = true
-  } catch (err) {
-    message.error('AI提取角色失败：' + err.message)
-  } finally {
-    extracting.value = false
+// 读取后台提取结果并弹出确认导入；无结果时提示手动新建
+function openExtractResult() {
+  const drafts = roleTask.consumeExtract()
+  if (!drafts.length) {
+    message.warning('未能自动识别角色，请手动新建角色')
+    return
   }
+  extractRoles.value = drafts.map((d) => ({ ...d, checked: true }))
+  extractOpen.value = true
 }
 
 async function confirmImport() {
@@ -360,6 +342,8 @@ async function confirmImport() {
 
 onMounted(() => {
   loadRoles()
+  // 若离开期间后台提取已完成，回到角色库时展示结果
+  if (roleTask.kind === 'extract' && roleTask.extractDrafts.length) openExtractResult()
 })
 </script>
 
@@ -421,8 +405,8 @@ onMounted(() => {
         <button class="foot-btn primary" @click="newRole">
           <Plus :size="15" /> 新建角色
         </button>
-        <button class="foot-btn" :disabled="extracting" @click="aiExtract">
-          <Sparkles :size="15" /> {{ extracting ? '提取中…' : 'AI提取角色' }}
+        <button class="foot-btn" :disabled="roleTask.active" @click="aiExtract">
+          <Sparkles :size="15" /> {{ roleTask.active && roleTask.kind === 'extract' ? '提取中…' : 'AI提取角色' }}
         </button>
       </div>
     </aside>
