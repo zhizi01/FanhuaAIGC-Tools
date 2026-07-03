@@ -44,7 +44,44 @@ const viewMode = ref('grid') // grid | list
 
 const detail = ref(null) // 完整 meta
 const dirty = ref(false)
-const form = reactive({ id: '', name: '', category: '其他', tags: [], description: '', usage: '' })
+const form = reactive({
+  id: '',
+  name: '',
+  category: '其他',
+  tags: [],
+  description: '',
+  usage: '',
+  linkedRoleIds: [],
+  linkedEpisodes: [],
+})
+
+// 关联可选项：角色与剧集
+const roleOptions = ref([])
+const episodeOptions = ref([])
+
+async function loadRoleOptions() {
+  if (!project.value?.path) return
+  try {
+    const list = await api.roles.list(project.value.path)
+    roleOptions.value = list.map((r) => ({ value: r.id, label: r.name }))
+  } catch {
+    roleOptions.value = []
+  }
+}
+async function loadEpisodeOptions() {
+  if (!project.value?.path) return
+  try {
+    const list = await api.scripts.list(project.value.path)
+    if (!list.length) return (episodeOptions.value = [])
+    const data = await api.scripts.read({ projectPath: project.value.path, scriptId: list[0].id })
+    episodeOptions.value = (data.meta.episodes || []).map((e) => ({
+      value: e.episodeNo,
+      label: `第${e.episodeNo}集`,
+    }))
+  } catch {
+    episodeOptions.value = []
+  }
+}
 
 const filteredAssets = computed(() => {
   const kw = search.value.trim().toLowerCase()
@@ -133,6 +170,8 @@ async function doSelect(id) {
       tags: [...(meta.tags || [])],
       description: meta.description || '',
       usage: meta.usage || '',
+      linkedRoleIds: [...(meta.linkedRoleIds || [])],
+      linkedEpisodes: [...(meta.linkedEpisodes || [])],
     })
     dirty.value = false
   } catch (err) {
@@ -153,8 +192,8 @@ async function saveDetail() {
         tags: form.tags,
         description: form.description,
         usage: form.usage,
-        linkedRoleIds: detail.value.linkedRoleIds || [],
-        linkedEpisodes: detail.value.linkedEpisodes || [],
+        linkedRoleIds: form.linkedRoleIds,
+        linkedEpisodes: form.linkedEpisodes,
       },
     })
     await loadAssets()
@@ -195,7 +234,11 @@ function markDirty() {
   dirty.value = true
 }
 
-onMounted(loadAssets)
+onMounted(() => {
+  loadAssets()
+  loadRoleOptions()
+  loadEpisodeOptions()
+})
 </script>
 
 <template>
@@ -322,6 +365,24 @@ onMounted(loadAssets)
         </a-form-item>
         <a-form-item label="描述">
           <a-textarea v-model:value="form.description" :rows="3" @change="markDirty" />
+        </a-form-item>
+        <a-form-item label="关联角色">
+          <a-select
+            v-model:value="form.linkedRoleIds"
+            mode="multiple"
+            placeholder="关联到角色"
+            :options="roleOptions"
+            @change="markDirty"
+          />
+        </a-form-item>
+        <a-form-item label="关联剧集">
+          <a-select
+            v-model:value="form.linkedEpisodes"
+            mode="multiple"
+            placeholder="关联到剧集"
+            :options="episodeOptions"
+            @change="markDirty"
+          />
         </a-form-item>
       </a-form>
 

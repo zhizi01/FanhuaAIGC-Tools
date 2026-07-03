@@ -8,9 +8,24 @@ import { useAppStore } from '../../store/appState.js'
 import { api } from '../../services/bridge.js'
 import { genLocalId } from '../../utils/id.js'
 import { renderMarkdown } from '../../utils/markdown.js'
+import { assetUrl } from '../../utils/asset.js'
 
 const appStore = useAppStore()
 const project = computed(() => appStore.currentProject)
+
+const assets = ref([])
+const imageAssets = computed(() => assets.value.filter((a) => a.type === 'image'))
+const assetOptions = computed(() => assets.value.map((a) => ({ value: a.id, label: a.name })))
+const imageAssetOptions = computed(() => imageAssets.value.map((a) => ({ value: a.id, label: a.name })))
+
+function findAsset(id) {
+  return assets.value.find((a) => a.id === id) || null
+}
+function assetPreviewUrl(id) {
+  const a = findAsset(id)
+  if (!a) return ''
+  return assetUrl(project.value?.path, a.thumbnail || a.file)
+}
 
 const ROLE_TYPES = ['主角', '配角', '反派', '路人', '旁白']
 
@@ -257,14 +272,29 @@ function removeRole() {
 }
 
 const renderedProfile = computed(() => renderMarkdown(form.profile))
+const avatarUrl = computed(() => assetPreviewUrl(form.avatarAssetId))
 
 function markDirty() {
   dirty.value = true
 }
 
+function roleAvatarUrl(r) {
+  return r.avatarAssetId ? assetPreviewUrl(r.avatarAssetId) : ''
+}
+
+async function loadAssets() {
+  if (!project.value?.path) return
+  try {
+    assets.value = await api.assets.list(project.value.path)
+  } catch {
+    assets.value = []
+  }
+}
+
 onMounted(() => {
   loadRoles()
   loadEpisodes()
+  loadAssets()
 })
 </script>
 
@@ -302,7 +332,10 @@ onMounted(() => {
             :class="{ active: activeRoleId === r.id }"
             @click="selectRole(r.id)"
           >
-            <div class="role-avatar">{{ (r.name || '?').slice(0, 1) }}</div>
+            <div class="role-avatar">
+              <img v-if="roleAvatarUrl(r)" :src="roleAvatarUrl(r)" :alt="r.name" />
+              <span v-else>{{ (r.name || '?').slice(0, 1) }}</span>
+            </div>
             <div class="role-info">
               <div class="role-name">{{ r.name }}</div>
               <div class="role-meta">
@@ -443,8 +476,35 @@ onMounted(() => {
       </div>
 
       <div class="aside-block">
-        <div class="aside-title">关联资产</div>
-        <div class="aside-hint">头像与参考资产将在资产库就绪后开放绑定。</div>
+        <div class="aside-title">头像资产</div>
+        <div class="avatar-pick">
+          <div class="avatar-box">
+            <img v-if="avatarUrl" :src="avatarUrl" alt="头像" />
+            <Users v-else :size="22" />
+          </div>
+          <a-select
+            v-model:value="form.avatarAssetId"
+            class="w-full"
+            allow-clear
+            placeholder="选择图片资产作为头像"
+            :options="imageAssetOptions"
+            @change="markDirty"
+          />
+        </div>
+        <div v-if="!imageAssets.length" class="aside-hint">资产库暂无图片，可先在资产库导入。</div>
+      </div>
+
+      <div class="aside-block">
+        <div class="aside-title">参考资产</div>
+        <a-select
+          v-model:value="form.referenceAssetIds"
+          mode="multiple"
+          class="w-full"
+          placeholder="选择参考资产（图片/音频/视频/文档）"
+          :options="assetOptions"
+          @change="markDirty"
+        />
+        <div v-if="!assets.length" class="aside-hint">资产库暂无资产，可先在资产库导入。</div>
       </div>
     </aside>
   </div>
@@ -534,6 +594,7 @@ onMounted(() => {
   height: 38px;
   flex-shrink: 0;
   border-radius: 10px;
+  overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -541,6 +602,11 @@ onMounted(() => {
   font-weight: 700;
   color: var(--text-onbrand);
   background: var(--gradient-brand);
+}
+.role-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 .role-info {
   min-width: 0;
@@ -773,6 +839,29 @@ onMounted(() => {
 }
 .w-full {
   width: 100%;
+}
+.avatar-pick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.avatar-box {
+  width: 52px;
+  height: 52px;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-sunken);
+  color: var(--text-tertiary);
+  border: 1px solid var(--border-color);
+}
+.avatar-box img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 .relation-row {
   display: flex;
