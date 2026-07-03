@@ -6,6 +6,7 @@ import { registerProjectsIpc } from './ipc/projects.js'
 import { registerScriptsIpc } from './ipc/scripts.js'
 import { registerDialogsIpc } from './ipc/dialogs.js'
 import { registerUsageIpc } from './ipc/usage.js'
+import { registerRolesIpc } from './ipc/roles.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -60,6 +61,7 @@ function registerIpc() {
   registerScriptsIpc()
   registerDialogsIpc(() => mainWindow)
   registerUsageIpc()
+  registerRolesIpc()
 }
 
 app.whenReady().then(() => {

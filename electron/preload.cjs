@@ -22,6 +22,13 @@ contextBridge.exposeInMainWorld('api', {
     remove: (payload) => ipcRenderer.invoke('scripts:remove', payload),
     uploadAndParse: (payload) => ipcRenderer.invoke('scripts:uploadAndParse', payload),
   },
+  // 角色库
+  roles: {
+    list: (projectPath) => ipcRenderer.invoke('roles:list', projectPath),
+    read: (payload) => ipcRenderer.invoke('roles:read', payload),
+    save: (payload) => ipcRenderer.invoke('roles:save', payload),
+    remove: (payload) => ipcRenderer.invoke('roles:remove', payload),
+  },
   // 系统对话框
   dialog: {
     selectProjectDir: () => ipcRenderer.invoke('dialog:selectProjectDir'),

@@ -55,6 +55,12 @@ function wrapElectronApi(raw) {
       remove: (payload) => raw.scripts.remove(toPlain(payload)),
       uploadAndParse: (payload) => raw.scripts.uploadAndParse(toPlain(payload)),
     },
+    roles: {
+      list: (projectPath) => raw.roles.list(projectPath),
+      read: (payload) => raw.roles.read(toPlain(payload)),
+      save: (payload) => raw.roles.save(toPlain(payload)),
+      remove: (payload) => raw.roles.remove(toPlain(payload)),
+    },
     dialog: {
       selectProjectDir: () => raw.dialog.selectProjectDir(),
       selectScriptFile: () => raw.dialog.selectScriptFile(),
@@ -91,6 +97,12 @@ const fallbackApi = {
     read: desktopOnly('读取剧本'),
     remove: desktopOnly('删除剧本'),
     uploadAndParse: desktopOnly('上传剧本'),
+  },
+  roles: {
+    list: async () => [],
+    read: desktopOnly('读取角色'),
+    save: desktopOnly('保存角色'),
+    remove: desktopOnly('删除角色'),
   },
   dialog: {
     selectProjectDir: desktopOnly('选择工程目录'),
