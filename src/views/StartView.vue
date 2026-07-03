@@ -234,17 +234,19 @@ onMounted(loadRecent)
 .brand-logo {
   width: 46px;
   height: 46px;
-  border-radius: 12px;
+  border-radius: 13px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
-  background: linear-gradient(135deg, var(--brand-color), #37e0c4);
+  color: var(--text-onbrand);
+  background: var(--gradient-brand);
+  box-shadow: 0 6px 16px var(--brand-soft);
 }
 .brand-title {
   font-size: 16px;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--text-primary);
+  letter-spacing: 0.2px;
 }
 .brand-sub {
   font-size: 12px;
@@ -312,17 +314,18 @@ onMounted(loadRecent)
   transform: translateY(-1px);
 }
 .project-avatar {
-  width: 44px;
-  height: 44px;
-  border-radius: 10px;
+  width: 46px;
+  height: 46px;
+  border-radius: 12px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--brand-color);
-  background: var(--bg-active);
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--text-onbrand);
+  background: var(--gradient-brand);
+  box-shadow: 0 4px 12px var(--brand-soft);
 }
 .project-info {
   flex: 1;

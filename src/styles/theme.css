@@ -1,53 +1,75 @@
-/* 主题变量：浅色 / 深色，配合设置页外观配置动态切换
-   品牌主色采用参考图的青绿（teal）色系 */
+/* 设计令牌：浅色 / 深色双主题，配合设置页外观配置动态切换。
+   产品定位为「专业创作型桌面工作台」，深色优先、青绿（teal）主色、层次分明。 */
 :root {
   --brand-color: #1ec9b0;
+  --brand-strong: #12a892;
+  --brand-soft: rgba(30, 201, 176, 0.12);
+  --brand-contrast: #04201c;
+  --gradient-brand: linear-gradient(135deg, #22d3bb 0%, #14b8a6 100%);
 
-  --bg-app: #f4f6f7;
+  --bg-app: #f5f7f8;
   --bg-panel: #ffffff;
   --bg-elevated: #ffffff;
-  --bg-hover: #eef1f2;
+  --bg-sunken: #eef1f3;
+  --bg-hover: #eef1f3;
   --bg-active: rgba(30, 201, 176, 0.12);
 
-  --text-primary: #1f2329;
-  --text-secondary: #5a6570;
+  --text-primary: #1a1f26;
+  --text-secondary: #55606c;
   --text-tertiary: #8a94a0;
+  --text-onbrand: #ffffff;
 
-  --border-color: #e6e8eb;
-  --border-strong: #d4d7dc;
+  --border-color: #e7eaee;
+  --border-strong: #d3d8de;
 
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 16px rgba(0, 0, 0, 0.06);
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04), 0 8px 24px rgba(16, 24, 40, 0.06);
+  --shadow-lg: 0 12px 32px rgba(16, 24, 40, 0.12);
+  --shadow-pop: 0 8px 28px rgba(16, 24, 40, 0.16);
 
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
 
   /* 界面密度 */
   --space-unit: 16px;
-  --control-height: 36px;
-  --sidebar-width: 220px;
+  --control-height: 38px;
+  --sidebar-width: 236px;
 }
 
-/* 深色主题：参考图的深色配色系（深炭底 + 青绿高亮） */
+/* 深色主题（默认创作氛围）：深炭底 + 青绿高亮 */
 [data-theme='dark'] {
-  --bg-app: #0e1116;
-  --bg-panel: #161a22;
-  --bg-elevated: #1c212b;
-  --bg-hover: #242a35;
-  --bg-active: rgba(30, 201, 176, 0.16);
+  --brand-color: #22d3bb;
+  --brand-strong: #14b8a6;
+  --brand-soft: rgba(34, 211, 187, 0.16);
+  --brand-contrast: #04201c;
+  --gradient-brand: linear-gradient(135deg, #2ee6cd 0%, #12a892 100%);
 
-  --text-primary: #e6e9ee;
-  --text-secondary: #9aa4b2;
-  --text-tertiary: #6b7482;
+  --bg-app: #0c0f14;
+  --bg-panel: #141922;
+  --bg-elevated: #1a2029;
+  --bg-sunken: #0f141b;
+  --bg-hover: #212834;
+  --bg-active: rgba(34, 211, 187, 0.16);
 
-  --border-color: #262b34;
-  --border-strong: #363c47;
+  --text-primary: #e8ecf1;
+  --text-secondary: #9aa5b3;
+  --text-tertiary: #6a7484;
+  --text-onbrand: #ffffff;
 
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 20px rgba(0, 0, 0, 0.45);
+  --border-color: #232a35;
+  --border-strong: #333b48;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35), 0 10px 30px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.55);
+  --shadow-pop: 0 10px 34px rgba(0, 0, 0, 0.6);
 }
 
 [data-density='compact'] {
   --space-unit: 10px;
-  --control-height: 30px;
-  --sidebar-width: 196px;
+  --control-height: 32px;
+  --sidebar-width: 208px;
 }

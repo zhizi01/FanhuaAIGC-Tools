@@ -20,12 +20,41 @@ export function computeIsDark(appearance) {
   return window.matchMedia('(prefers-color-scheme: dark)').matches
 }
 
+// ---------- 颜色工具：让整套强调色（渐变/浅底/描边）跟随用户主色 ----------
+function hexToRgb(hex) {
+  const h = String(hex || '').replace('#', '')
+  const full = h.length === 3 ? h.split('').map((c) => c + c).join('') : h
+  const int = parseInt(full || '1ec9b0', 16)
+  return { r: (int >> 16) & 255, g: (int >> 8) & 255, b: int & 255 }
+}
+function rgba(hex, a) {
+  const { r, g, b } = hexToRgb(hex)
+  return `rgba(${r}, ${g}, ${b}, ${a})`
+}
+// 与黑/白混合，amt 越大越接近目标色
+function mix(hex, target, amt) {
+  const c = hexToRgb(hex)
+  const t = hexToRgb(target)
+  const m = (k) => Math.round(c[k] + (t[k] - c[k]) * amt)
+  return `rgb(${m('r')}, ${m('g')}, ${m('b')})`
+}
+
 // 把外观配置应用到根节点（CSS 变量与主题属性）
 export function applyAppearance(appearance) {
   const root = document.documentElement
-  root.setAttribute('data-theme', computeIsDark(appearance) ? 'dark' : 'light')
+  const dark = computeIsDark(appearance)
+  root.setAttribute('data-theme', dark ? 'dark' : 'light')
   root.setAttribute('data-density', appearance?.density || 'comfortable')
-  root.style.setProperty('--brand-color', appearance?.primaryColor || '#1ec9b0')
+
+  const brand = appearance?.primaryColor || '#1ec9b0'
+  root.style.setProperty('--brand-color', brand)
+  root.style.setProperty('--brand-strong', mix(brand, '#000000', 0.14))
+  root.style.setProperty('--brand-soft', rgba(brand, dark ? 0.16 : 0.12))
+  root.style.setProperty('--bg-active', rgba(brand, dark ? 0.16 : 0.12))
+  root.style.setProperty(
+    '--gradient-brand',
+    `linear-gradient(135deg, ${mix(brand, '#ffffff', 0.16)} 0%, ${mix(brand, '#000000', 0.06)} 100%)`,
+  )
 }
 
 export async function loadSettings() {
@@ -70,8 +99,4 @@ export function restoreCurrentProject() {
     // 忽略解析异常
   }
   return appState.currentProject
-}
-
-export function setCurrentModel(id) {
-  appState.currentModelId = id
 }

@@ -1,18 +1,8 @@
 <script setup>
-import { computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed } from 'vue'
 import { theme } from 'ant-design-vue'
 import zhCN from 'ant-design-vue/es/locale/zh_CN'
 import { appState, computeIsDark } from './store/appState.js'
-
-const router = useRouter()
-
-onMounted(() => {
-  // 响应窗口菜单的导航请求
-  if (window.api?.onNavigate) {
-    window.api.onNavigate((path) => router.push(path))
-  }
-})
 
 const themeConfig = computed(() => {
   const appearance = appState.settings.appearance

@@ -1,14 +1,13 @@
 <script setup>
 import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { FolderKanban, ScrollText, Users, Package, Film } from 'lucide-vue-next'
-import { appState, restoreCurrentProject, setCurrentModel } from '../store/appState.js'
+import { FolderKanban, ScrollText, Users, Package, Film, LogOut, Settings } from 'lucide-vue-next'
+import { appState, restoreCurrentProject } from '../store/appState.js'
 
 const route = useRoute()
 const router = useRouter()
 
 const project = computed(() => appState.currentProject)
-const models = computed(() => appState.settings.models)
 
 const menus = [
   { key: 'project-home', label: '工程', path: '/project/home', icon: FolderKanban },
@@ -23,8 +22,12 @@ function go(item) {
   if (route.path !== item.path) router.push(item.path)
 }
 
-function onModelChange(id) {
-  setCurrentModel(id)
+function backToStart() {
+  router.push('/')
+}
+
+function openSettings() {
+  router.push('/settings')
 }
 
 onMounted(() => {
@@ -35,9 +38,15 @@ onMounted(() => {
 <template>
   <div class="project-shell">
     <aside class="project-side">
+      <!-- 品牌：软件标题 + 当前工程名作为副标题 -->
       <div class="side-brand">
         <div class="side-logo"><Film :size="20" /></div>
-        <span class="side-app-name">青山AI漫剧</span>
+        <div class="side-brand-text">
+          <div class="side-app-name">青山AI漫剧工具</div>
+          <div class="side-project-name" :title="project?.name">
+            {{ project?.name || '未打开工程' }}
+          </div>
+        </div>
       </div>
 
       <nav class="side-menu">
@@ -48,36 +57,26 @@ onMounted(() => {
           :class="{ active: activeKey === item.key }"
           @click="go(item)"
         >
-          <component :is="item.icon" :size="18" />
-          <span>{{ item.label }}</span>
+          <span class="menu-ico"><component :is="item.icon" :size="18" /></span>
+          <span class="menu-label">{{ item.label }}</span>
         </button>
       </nav>
+
+      <!-- 侧栏底部：设置 + 返回主菜单 -->
+      <div class="side-footer">
+        <button class="foot-item" @click="openSettings">
+          <Settings :size="17" />
+          <span>设置</span>
+        </button>
+        <button class="foot-item back" @click="backToStart">
+          <LogOut :size="17" />
+          <span>返回主菜单</span>
+        </button>
+      </div>
     </aside>
 
     <div class="project-work">
-      <header class="work-topbar">
-        <div class="topbar-left">
-          <span class="project-name">{{ project?.name || '未打开工程' }}</span>
-        </div>
-        <div class="topbar-right">
-          <span class="model-label">模型</span>
-          <a-select
-            :value="appState.currentModelId"
-            style="width: 220px"
-            placeholder="未配置模型"
-            :options="models.map((m) => ({ value: m.id, label: m.displayName }))"
-            @change="onModelChange"
-          >
-            <template #notFoundContent>
-              <div class="model-empty">请先在设置中添加模型</div>
-            </template>
-          </a-select>
-        </div>
-      </header>
-
-      <div class="work-content">
-        <router-view />
-      </div>
+      <router-view />
     </div>
   </div>
 </template>
@@ -96,40 +95,64 @@ onMounted(() => {
   border-right: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
-  padding: 16px 12px;
+  padding: 18px 14px;
 }
+
+/* 品牌区 */
 .side-brand {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 6px 10px 18px;
+  gap: 11px;
+  padding: 6px 8px 18px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--border-color);
 }
 .side-logo {
-  width: 34px;
-  height: 34px;
-  border-radius: 9px;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  border-radius: 11px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
-  background: linear-gradient(135deg, var(--brand-color), #37e0c4);
+  color: var(--text-onbrand);
+  background: var(--gradient-brand);
+  box-shadow: 0 4px 12px var(--brand-soft);
+}
+.side-brand-text {
+  min-width: 0;
 }
 .side-app-name {
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--text-primary);
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.side-project-name {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-top: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
+/* 导航菜单 */
 .side-menu {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  margin-top: 10px;
 }
 .menu-item {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 10px;
-  height: 40px;
+  gap: 11px;
+  height: 42px;
   padding: 0 12px;
   border: none;
   background: transparent;
@@ -137,7 +160,7 @@ onMounted(() => {
   color: var(--text-secondary);
   font-size: 14px;
   cursor: pointer;
-  transition: all 0.12s ease;
+  transition: background 0.16s ease, color 0.16s ease;
 }
 .menu-item:hover {
   background: var(--bg-hover);
@@ -148,47 +171,59 @@ onMounted(() => {
   color: var(--brand-color);
   font-weight: 600;
 }
+.menu-item.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 18px;
+  border-radius: 0 3px 3px 0;
+  background: var(--brand-color);
+}
+.menu-ico {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 底部操作 */
+.side-footer {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.foot-item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  height: 40px;
+  padding: 0 12px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.16s ease, color 0.16s ease;
+}
+.foot-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.foot-item.back:hover {
+  color: var(--brand-color);
+}
 
 .project-work {
   flex: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
-}
-.work-topbar {
-  height: 56px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 24px;
-  background: var(--bg-panel);
-  border-bottom: 1px solid var(--border-color);
-}
-.project-name {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-.topbar-right {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.model-label {
-  font-size: 13px;
-  color: var(--text-tertiary);
-}
-.model-empty {
-  padding: 8px;
-  color: var(--text-tertiary);
-  font-size: 13px;
-  text-align: center;
-}
-
-.work-content {
-  flex: 1;
-  overflow: hidden;
   min-height: 0;
 }
 </style>

@@ -59,7 +59,6 @@ function wrapElectronApi(raw) {
       selectProjectDir: () => raw.dialog.selectProjectDir(),
       selectScriptFile: () => raw.dialog.selectScriptFile(),
     },
-    onNavigate: raw.onNavigate,
   }
 }
 

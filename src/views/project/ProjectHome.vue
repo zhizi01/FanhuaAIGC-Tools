@@ -64,18 +64,20 @@ const project = computed(() => appState.currentProject || {})
   margin-bottom: 24px;
 }
 .page-head-icon {
-  width: 46px;
-  height: 46px;
-  border-radius: 12px;
+  width: 48px;
+  height: 48px;
+  border-radius: 13px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--brand-color);
-  background: var(--bg-active);
+  color: var(--text-onbrand);
+  background: var(--gradient-brand);
+  box-shadow: 0 6px 16px var(--brand-soft);
 }
 .page-title {
   margin: 0;
   font-size: 20px;
+  font-weight: 700;
   color: var(--text-primary);
 }
 .page-sub {
@@ -90,6 +92,7 @@ const project = computed(() => appState.currentProject || {})
   border-radius: var(--radius-lg);
   padding: 8px 20px;
   margin-bottom: 20px;
+  box-shadow: var(--shadow-sm);
 }
 .info-row {
   display: flex;

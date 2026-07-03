@@ -329,13 +329,14 @@ function formatContext(size) {
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
   padding: 22px 24px;
+  box-shadow: var(--shadow-sm);
 }
 .card-title {
   display: flex;
   align-items: center;
   gap: 8px;
   font-size: 16px;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--text-primary);
   margin-bottom: 4px;
 }
@@ -403,6 +404,11 @@ function formatContext(size) {
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+.model-item:hover {
+  border-color: var(--brand-color);
+  box-shadow: var(--shadow-sm);
 }
 .model-main {
   flex: 1;

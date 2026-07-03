@@ -1,6 +1,7 @@
 <script setup>
 // 剧本库：当前作品的分集剧本工作区
-// 左侧分集目录 + 中间工作区（预览 / 源码 / AI优化），顶部工具栏提供上传剧本、AI生成、保存
+// 左侧分集目录 + 中间工作区（预览 / 源码 / AI优化）。
+// 「上传剧本」「AI生成」为剧本页内的独立面板视图（独立 VUE 文件）。
 import { computed, onMounted, ref } from 'vue'
 import { message, Modal } from 'ant-design-vue'
 import {
@@ -20,10 +21,12 @@ import { api } from '../../services/bridge.js'
 import { genLocalId } from '../../utils/id.js'
 import { renderMarkdown, buildScriptFromMarkdown } from '../../utils/markdown.js'
 import { optimizeEpisode } from '../../services/ai.js'
-import UploadScriptModal from '../../components/UploadScriptModal.vue'
-import AiGenerateModal from '../../components/AiGenerateModal.vue'
+import ScriptUpload from './ScriptUpload.vue'
+import ScriptGenerate from './ScriptGenerate.vue'
 
 const project = computed(() => appState.currentProject)
+
+const view = ref('library') // library | upload | generate
 
 const scripts = ref([]) // 索引列表
 const current = ref(null) // { meta, overview, episodes }
@@ -34,8 +37,6 @@ const dirty = ref(false)
 
 const loading = ref(false)
 const saving = ref(false)
-const uploadOpen = ref(false)
-const generateOpen = ref(false)
 
 const aiInstruction = ref('')
 const aiRunning = ref(false)
@@ -300,8 +301,8 @@ async function save() {
   }
 }
 
-// ---------- 上传 / AI生成 完成回调 ----------
-async function handleGenerated(payload) {
+// ---------- 上传 / AI生成 面板完成回调 ----------
+async function buildAndSave(payload) {
   const built = buildScriptFromMarkdown(payload.fullMarkdown, {
     title: payload.title,
     sourceType: payload.sourceType,
@@ -336,11 +337,18 @@ async function handleGenerated(payload) {
     const meta = await api.scripts.save({ projectPath: project.value.path, script })
     await loadScripts(meta.id)
     message.success(payload.sourceType === 'ai' ? 'AI生成完成，已保存到剧本库' : '标准化完成，已保存到剧本库')
+    return true
   } catch (err) {
     message.error('保存失败：' + err.message)
+    return false
   } finally {
     saving.value = false
   }
+}
+
+async function onPanelComplete(payload) {
+  const ok = await buildAndSave(payload)
+  if (ok) view.value = 'library'
 }
 
 // ---------- AI 优化当前集 ----------
@@ -368,7 +376,12 @@ onMounted(() => loadScripts())
 </script>
 
 <template>
-  <div class="script-library">
+  <!-- 独立面板：上传剧本 / AI生成 -->
+  <ScriptUpload v-if="view === 'upload'" @back="view = 'library'" @complete="onPanelComplete" />
+  <ScriptGenerate v-else-if="view === 'generate'" @back="view = 'library'" @complete="onPanelComplete" />
+
+  <!-- 剧本库主视图 -->
+  <div v-else class="script-library">
     <!-- 顶部工具栏 -->
     <header class="lib-toolbar">
       <div class="toolbar-left">
@@ -394,20 +407,20 @@ onMounted(() => loadScripts())
             秒
           </span>
           <a-tag v-if="current.meta.status" class="status-tag">{{ current.meta.status }}</a-tag>
-          <span v-if="dirty" class="dirty-dot" title="有未保存的修改">未保存</span>
+          <span v-if="dirty" class="dirty-dot" title="有未保存的修改">● 未保存</span>
         </template>
         <template v-else>
-          <ScrollText :size="18" class="toolbar-icon" />
+          <span class="toolbar-icon"><ScrollText :size="18" /></span>
           <span class="toolbar-title">剧本库</span>
           <span class="toolbar-sub">当前作品的分集剧本工作区</span>
         </template>
       </div>
       <div class="toolbar-right">
-        <a-button @click="uploadOpen = true">
+        <a-button @click="view = 'upload'">
           <template #icon><Upload :size="15" /></template>
           上传剧本
         </a-button>
-        <a-button @click="generateOpen = true">
+        <a-button @click="view = 'generate'">
           <template #icon><Sparkles :size="15" /></template>
           AI生成
         </a-button>
@@ -430,7 +443,7 @@ onMounted(() => loadScripts())
             :options="scripts.map((s) => ({ value: s.id, label: s.title }))"
             @change="switchScript"
           />
-          <a-button size="small" type="text" title="新建剧本" @click="newScript">
+          <a-button size="small" type="text" title="新建剧本" class="new-script-btn" @click="newScript">
             <Plus :size="16" />
           </a-button>
         </div>
@@ -439,7 +452,7 @@ onMounted(() => loadScripts())
           <div class="nav-label">分集目录</div>
           <div class="nav-item" :class="{ active: isOverview }" @click="selectOverview">
             <FileText :size="15" />
-            <span>总览</span>
+            <span class="nav-item-text">总览</span>
           </div>
           <div
             v-for="ep in episodes"
@@ -468,14 +481,26 @@ onMounted(() => loadScripts())
       <section class="work-area">
         <!-- 空状态 -->
         <div v-if="!current" class="work-empty">
-          <div class="work-empty-icon"><Plus :size="30" /></div>
+          <div class="work-empty-icon"><ScrollText :size="30" /></div>
           <h3>开始创作这部作品的剧本</h3>
           <p>你可以新建并手写剧本，或上传外部文档、使用 AI 生成分集剧本。</p>
-          <a-space>
-            <a-button type="primary" @click="newScript">新建剧本</a-button>
-            <a-button @click="uploadOpen = true">上传剧本</a-button>
-            <a-button @click="generateOpen = true">AI生成</a-button>
-          </a-space>
+          <div class="empty-cards">
+            <button class="empty-card" @click="newScript">
+              <span class="ec-ico plus"><Plus :size="18" /></span>
+              <span class="ec-title">新建剧本</span>
+              <span class="ec-desc">从空白模板开始手写</span>
+            </button>
+            <button class="empty-card" @click="view = 'upload'">
+              <span class="ec-ico"><Upload :size="18" /></span>
+              <span class="ec-title">上传剧本</span>
+              <span class="ec-desc">导入文档并标准化</span>
+            </button>
+            <button class="empty-card" @click="view = 'generate'">
+              <span class="ec-ico"><Sparkles :size="18" /></span>
+              <span class="ec-title">AI生成</span>
+              <span class="ec-desc">按创意自动生成分集</span>
+            </button>
+          </div>
         </div>
 
         <!-- 编辑区 -->
@@ -537,9 +562,6 @@ onMounted(() => loadScripts())
         </div>
       </section>
     </div>
-
-    <UploadScriptModal v-model:open="uploadOpen" @complete="handleGenerated" />
-    <AiGenerateModal v-model:open="generateOpen" @complete="handleGenerated" />
   </div>
 </template>
 
@@ -552,12 +574,12 @@ onMounted(() => loadScripts())
 
 /* 顶部工具栏 */
 .lib-toolbar {
-  height: 56px;
+  height: 60px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px 0 20px;
+  padding: 0 18px 0 22px;
   border-bottom: 1px solid var(--border-color);
   background: var(--bg-panel);
   gap: 12px;
@@ -569,11 +591,12 @@ onMounted(() => loadScripts())
   min-width: 0;
 }
 .toolbar-icon {
+  display: flex;
   color: var(--brand-color);
 }
 .toolbar-title {
   font-size: 15px;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--text-primary);
 }
 .toolbar-sub {
@@ -582,10 +605,10 @@ onMounted(() => loadScripts())
 }
 .title-input {
   font-size: 15px;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--text-primary);
   padding-left: 0;
-  width: 200px;
+  width: 210px;
 }
 .toolbar-meta {
   display: flex;
@@ -604,6 +627,7 @@ onMounted(() => loadScripts())
 .dirty-dot {
   font-size: 12px;
   color: var(--brand-color);
+  white-space: nowrap;
 }
 .toolbar-right {
   display: flex;
@@ -620,7 +644,7 @@ onMounted(() => loadScripts())
 
 /* 分集目录 */
 .episode-nav {
-  width: 220px;
+  width: 228px;
   flex-shrink: 0;
   border-right: 1px solid var(--border-color);
   background: var(--bg-panel);
@@ -632,47 +656,57 @@ onMounted(() => loadScripts())
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 12px 10px;
+  padding: 12px 12px;
   border-bottom: 1px solid var(--border-color);
 }
 .script-select {
   flex: 1;
   min-width: 0;
 }
+.new-script-btn {
+  color: var(--text-secondary);
+}
 .nav-scroll {
   flex: 1;
   overflow-y: auto;
-  padding: 10px;
+  padding: 12px 10px;
 }
 .nav-label {
-  font-size: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
   color: var(--text-tertiary);
-  padding: 4px 8px 8px;
+  padding: 4px 8px 10px;
 }
 .nav-item {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
+  padding: 9px 10px;
   border-radius: var(--radius-sm);
   font-size: 14px;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background 0.12s ease;
+  transition: background 0.14s ease, color 0.14s ease;
 }
 .nav-item:hover {
   background: var(--bg-hover);
+  color: var(--text-primary);
 }
 .nav-item.active {
   background: var(--bg-active);
   color: var(--brand-color);
   font-weight: 600;
 }
+.nav-item-text {
+  flex: 1;
+}
 .ep-no {
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   flex-shrink: 0;
-  border-radius: 5px;
+  border-radius: 6px;
   background: var(--bg-hover);
   color: var(--text-tertiary);
   font-size: 12px;
@@ -682,7 +716,7 @@ onMounted(() => loadScripts())
 }
 .nav-item.active .ep-no {
   background: var(--brand-color);
-  color: #fff;
+  color: var(--text-onbrand);
 }
 .ep-title {
   flex: 1;
@@ -694,6 +728,7 @@ onMounted(() => loadScripts())
   opacity: 0;
   color: var(--text-tertiary);
   flex-shrink: 0;
+  transition: opacity 0.14s ease, color 0.14s ease;
 }
 .nav-item:hover .ep-del {
   opacity: 1;
@@ -712,19 +747,20 @@ onMounted(() => loadScripts())
   justify-content: center;
   gap: 6px;
   width: 100%;
-  margin-top: 8px;
-  padding: 8px;
+  margin-top: 10px;
+  padding: 9px;
   border: 1px dashed var(--border-strong);
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
   font-size: 13px;
   cursor: pointer;
-  transition: all 0.12s ease;
+  transition: all 0.14s ease;
 }
 .add-ep-btn:hover {
   color: var(--brand-color);
   border-color: var(--brand-color);
+  background: var(--brand-soft);
 }
 .remove-script-btn {
   display: flex;
@@ -732,16 +768,19 @@ onMounted(() => loadScripts())
   justify-content: center;
   gap: 6px;
   width: 100%;
-  margin-top: 20px;
-  padding: 7px;
+  margin-top: 18px;
+  padding: 8px;
   border: none;
   background: transparent;
   color: var(--text-tertiary);
   font-size: 12px;
   cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: all 0.14s ease;
 }
 .remove-script-btn:hover {
   color: #ff4d4f;
+  background: rgba(255, 77, 79, 0.08);
 }
 
 /* 工作区 */
@@ -750,18 +789,20 @@ onMounted(() => loadScripts())
   display: flex;
   min-width: 0;
   overflow: hidden;
+  background: var(--bg-app);
 }
 .work-empty {
   margin: auto;
   text-align: center;
-  max-width: 440px;
+  max-width: 620px;
+  padding: 24px;
   color: var(--text-secondary);
 }
 .work-empty-icon {
-  width: 72px;
-  height: 72px;
-  border-radius: 18px;
-  margin: 0 auto 16px;
+  width: 76px;
+  height: 76px;
+  border-radius: 20px;
+  margin: 0 auto 18px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -770,12 +811,56 @@ onMounted(() => loadScripts())
 }
 .work-empty h3 {
   margin: 0 0 8px;
-  font-size: 17px;
+  font-size: 18px;
   color: var(--text-primary);
 }
 .work-empty p {
-  margin: 0 0 18px;
+  margin: 0 0 24px;
   font-size: 13px;
+}
+.empty-cards {
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+}
+.empty-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 168px;
+  padding: 18px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.16s ease;
+}
+.empty-card:hover {
+  border-color: var(--brand-color);
+  box-shadow: var(--shadow-card);
+  transform: translateY(-2px);
+}
+.ec-ico {
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--brand-color);
+  background: var(--bg-active);
+  margin-bottom: 8px;
+}
+.ec-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.ec-desc {
+  font-size: 12px;
+  color: var(--text-tertiary);
 }
 
 .work-panel {
@@ -785,13 +870,14 @@ onMounted(() => loadScripts())
   min-width: 0;
 }
 .work-head {
-  height: 48px;
+  height: 50px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 20px;
+  padding: 0 22px;
   border-bottom: 1px solid var(--border-color);
+  background: var(--bg-panel);
 }
 .work-head-title {
   font-size: 14px;
@@ -805,21 +891,21 @@ onMounted(() => loadScripts())
   display: flex;
   gap: 2px;
   padding: 3px;
-  background: var(--bg-hover);
+  background: var(--bg-sunken);
   border-radius: var(--radius-sm);
 }
 .mode-btn {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 5px 12px;
+  padding: 5px 13px;
   border: none;
   background: transparent;
-  border-radius: 5px;
+  border-radius: 6px;
   color: var(--text-secondary);
   font-size: 13px;
   cursor: pointer;
-  transition: all 0.12s ease;
+  transition: all 0.14s ease;
 }
 .mode-btn:hover {
   color: var(--text-primary);
@@ -828,13 +914,13 @@ onMounted(() => loadScripts())
   background: var(--bg-panel);
   color: var(--brand-color);
   font-weight: 600;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  box-shadow: var(--shadow-sm);
 }
 .work-content {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 20px 24px;
+  padding: 22px 26px;
 }
 
 /* 源码编辑 */
@@ -846,15 +932,17 @@ onMounted(() => loadScripts())
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   padding: 16px;
-  background: var(--bg-elevated);
+  background: var(--bg-panel);
   color: var(--text-primary);
   font-family: 'Consolas', 'Menlo', monospace;
   font-size: 13px;
-  line-height: 1.8;
+  line-height: 1.85;
   outline: none;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
 }
 .md-source:focus {
   border-color: var(--brand-color);
+  box-shadow: 0 0 0 3px var(--brand-soft);
 }
 
 /* AI 优化面板 */

@@ -27,10 +27,4 @@ contextBridge.exposeInMainWorld('api', {
     selectProjectDir: () => ipcRenderer.invoke('dialog:selectProjectDir'),
     selectScriptFile: () => ipcRenderer.invoke('dialog:selectScriptFile'),
   },
-  // 窗口菜单导航（返回起始页 / 设置）
-  onNavigate: (callback) => {
-    const handler = (_e, path) => callback(path)
-    ipcRenderer.on('menu:navigate', handler)
-    return () => ipcRenderer.removeListener('menu:navigate', handler)
-  },
 })

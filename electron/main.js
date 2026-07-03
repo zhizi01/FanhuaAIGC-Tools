@@ -1,11 +1,10 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, Menu } from 'electron'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { registerSettingsIpc } from './ipc/settings.js'
 import { registerProjectsIpc } from './ipc/projects.js'
 import { registerScriptsIpc } from './ipc/scripts.js'
 import { registerDialogsIpc } from './ipc/dialogs.js'
-import { buildAppMenu } from './menu.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -20,7 +19,7 @@ function createWindow() {
     height: 860,
     minWidth: 1080,
     minHeight: 680,
-    backgroundColor: '#f5f6f8',
+    backgroundColor: '#0e1116',
     title: '青山AI漫剧工具',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -30,9 +29,20 @@ function createWindow() {
     },
   })
 
+  // 仅保留 F12 / Ctrl+Shift+I 控制开发者工具，不再提供顶部菜单
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return
+    const key = (input.key || '').toLowerCase()
+    const toggleByF12 = key === 'f12'
+    const toggleByInspect = input.control && input.shift && key === 'i'
+    if (toggleByF12 || toggleByInspect) {
+      mainWindow.webContents.toggleDevTools()
+      event.preventDefault()
+    }
+  })
+
   if (devServerUrl) {
     mainWindow.loadURL(devServerUrl)
-    mainWindow.webContents.openDevTools({ mode: 'detach' })
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
   }
@@ -51,8 +61,9 @@ function registerIpc() {
 }
 
 app.whenReady().then(() => {
+  // 移除应用顶部菜单栏（返回起始页/设置等改由界面内按钮承担）
+  Menu.setApplicationMenu(null)
   registerIpc()
-  buildAppMenu(() => mainWindow)
   createWindow()
 
   app.on('activate', () => {
