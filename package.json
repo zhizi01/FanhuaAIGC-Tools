@@ -21,8 +21,6 @@
     "@vue-flow/node-resizer": "^1.5.1",
     "ant-design-vue": "^4.2.6",
     "axios": "^1.18.1",
-    "electron": "^42.5.0",
-    "electron-builder": "^26.15.3",
     "lucide-vue-next": "^1.0.0",
     "mammoth": "^1.12.0",
     "marked": "^18.0.5",
@@ -33,6 +31,8 @@
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.7",
+    "electron": "^42.5.0",
+    "electron-builder": "^26.15.3",
     "vite": "^8.1.0"
   },
   "build": {
