@@ -16,6 +16,7 @@ import {
   FileText,
   ScrollText,
   ListTree,
+  Download,
 } from 'lucide-vue-next'
 import { appState } from '../../store/appState.js'
 import { api } from '../../services/bridge.js'
@@ -345,11 +346,11 @@ async function convertOverviewToEpisodes() {
   }
   Modal.confirm({
     title: '一键转化为项目剧本',
-    content: `将从总览解析出 ${parsed.episodes.length} 集并自动建立分集，总览将只保留分集前的内容，确定继续吗？`,
+    content: `将从总览解析出 ${parsed.episodes.length} 集并自动建立分集。总览内容仍会完整保留，确定继续吗？`,
     okText: '转化',
     cancelText: '取消',
     async onOk() {
-      current.value.overview = parsed.overview
+      // 保留总览完整内容，仅额外建立分集
       current.value.episodes = parsed.episodes
       current.value.meta.status = '已转化'
       activeEpisodeNo.value = parsed.episodes[0].episodeNo
@@ -357,6 +358,33 @@ async function convertOverviewToEpisodes() {
       await save()
     },
   })
+}
+
+// ---------- 导出剧本 ----------
+async function exportScript() {
+  if (!current.value) return
+  const c = current.value
+  const parts = []
+  if (c.overview && c.overview.trim()) parts.push(c.overview.trim())
+  // 若分集正文未包含在总览中，则补充到导出内容里
+  const overviewText = c.overview || ''
+  for (const ep of c.episodes || []) {
+    const body = (ep.content || '').trim()
+    if (body && !overviewText.includes(body)) parts.push(body)
+  }
+  const content = parts.join('\n\n')
+  if (!content.trim()) return message.warning('剧本内容为空，无法导出')
+
+  const safeTitle = (c.meta.title || '未命名剧本').replace(/[\\/:*?"<>|]/g, '_')
+  try {
+    const savedPath = await api.dialog.exportScript({
+      defaultName: `${safeTitle}.md`,
+      content,
+    })
+    if (savedPath) message.success('已导出到：' + savedPath)
+  } catch (err) {
+    message.error('导出失败：' + err.message)
+  }
 }
 
 // ---------- AI 优化当前集 ----------
@@ -424,10 +452,16 @@ onMounted(() => loadScripts())
         </template>
       </div>
       <div class="toolbar-right">
-        <a-button v-if="current" type="primary" :loading="saving" :disabled="!dirty" @click="save">
-          <template #icon><Save :size="15" /></template>
-          保存
-        </a-button>
+        <template v-if="current">
+          <a-button title="导出为 Markdown 文件" @click="exportScript">
+            <template #icon><Download :size="15" /></template>
+            导出剧本
+          </a-button>
+          <a-button type="primary" :loading="saving" :disabled="!dirty" @click="save">
+            <template #icon><Save :size="15" /></template>
+            保存
+          </a-button>
+        </template>
       </div>
     </header>
 

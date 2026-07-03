@@ -58,6 +58,7 @@ function wrapElectronApi(raw) {
     dialog: {
       selectProjectDir: () => raw.dialog.selectProjectDir(),
       selectScriptFile: () => raw.dialog.selectScriptFile(),
+      exportScript: (payload) => raw.dialog.exportScript(toPlain(payload)),
     },
   }
 }
@@ -90,6 +91,7 @@ const fallbackApi = {
   dialog: {
     selectProjectDir: desktopOnly('选择工程目录'),
     selectScriptFile: desktopOnly('选择剧本文件'),
+    exportScript: desktopOnly('导出剧本'),
   },
 }
 

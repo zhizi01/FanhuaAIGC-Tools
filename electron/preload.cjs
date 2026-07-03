@@ -26,5 +26,6 @@ contextBridge.exposeInMainWorld('api', {
   dialog: {
     selectProjectDir: () => ipcRenderer.invoke('dialog:selectProjectDir'),
     selectScriptFile: () => ipcRenderer.invoke('dialog:selectScriptFile'),
+    exportScript: (payload) => ipcRenderer.invoke('dialog:exportScript', payload),
   },
 })
