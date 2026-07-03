@@ -1,10 +1,11 @@
 <script setup>
 import { computed } from 'vue'
 import { FolderKanban } from 'lucide-vue-next'
-import { appState } from '../../store/appState.js'
+import { useAppStore } from '../../store/appState.js'
 import { formatTime } from '../../utils/format.js'
 
-const project = computed(() => appState.currentProject || {})
+const appStore = useAppStore()
+const project = computed(() => appStore.currentProject || {})
 </script>
 
 <template>

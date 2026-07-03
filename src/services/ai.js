@@ -1,17 +1,18 @@
 // AI 服务：OpenAI 兼容请求 + 剧本标准化 / AI生成 / 单集优化
 // 统一约束输出格式，并对返回结果做检测，异常时以上下文方式打回让模型重出。
 import axios from 'axios'
-import { appState } from '../store/appState.js'
+import { useAppStore } from '../store/appState.js'
 import { stripCodeFence } from '../utils/markdown.js'
 
 // 根据传入 id / 当前选择 / 默认标记解析出要使用的模型
 export function resolveModel(preferredId) {
-  const models = appState.settings.models || []
+  const appStore = useAppStore()
+  const models = appStore.settings.models || []
   if (!models.length) throw new Error('请先在设置页添加模型')
   const pick = (id) => (id ? models.find((m) => m.id === id) : null)
   return (
     pick(preferredId) ||
-    pick(appState.currentModelId) ||
+    pick(appStore.currentModelId) ||
     models.find((m) => m.isDefault) ||
     models[0]
   )

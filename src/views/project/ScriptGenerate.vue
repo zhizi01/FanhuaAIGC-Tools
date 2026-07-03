@@ -3,12 +3,15 @@
 import { computed, onMounted, reactive } from 'vue'
 import { message } from 'ant-design-vue'
 import { ArrowLeft, Sparkles } from 'lucide-vue-next'
-import { appState } from '../../store/appState.js'
-import { aiTask, startScriptTask } from '../../store/aiTasks.js'
+import { useAppStore } from '../../store/appState.js'
+import { useAiTaskStore } from '../../store/aiTasks.js'
 
 const emit = defineEmits(['back'])
 
-const models = computed(() => appState.settings.models || [])
+const appStore = useAppStore()
+const aiTask = useAiTaskStore()
+
+const models = computed(() => appStore.settings.models || [])
 const hasModel = computed(() => models.value.length > 0)
 
 const GENRES = ['都市', '玄幻', '悬疑', '校园', '古风', '科幻', '言情', '热血']
@@ -27,7 +30,7 @@ const form = reactive({
 
 onMounted(() => {
   const def =
-    models.value.find((m) => m.id === appState.currentModelId) ||
+    models.value.find((m) => m.id === appStore.currentModelId) ||
     models.value.find((m) => m.isDefault) ||
     models.value[0]
   form.modelId = def ? def.id : null
@@ -37,7 +40,7 @@ function submit() {
   if (!form.title.trim()) return message.warning('请填写剧本标题')
   if (!form.idea.trim()) return message.warning('请填写一句话创意')
   if (!hasModel.value) return message.warning('请先在设置页添加模型')
-  const res = startScriptTask({
+  const res = aiTask.start({
     kind: 'ai',
     title: form.title.trim(),
     params: {

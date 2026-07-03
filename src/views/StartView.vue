@@ -4,10 +4,11 @@ import { useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import { FolderPlus, FolderOpen, Settings, Clock, Trash2, Film } from 'lucide-vue-next'
 import { api } from '../services/bridge.js'
-import { setCurrentProject } from '../store/appState.js'
+import { useAppStore } from '../store/appState.js'
 import { formatTime } from '../utils/format.js'
 
 const router = useRouter()
+const appStore = useAppStore()
 
 const recentProjects = ref([])
 const loading = ref(false)
@@ -28,7 +29,7 @@ async function loadRecent() {
 }
 
 function enterProject(project) {
-  setCurrentProject(project)
+  appStore.setCurrentProject(project)
   router.push('/project/scripts')
 }
 

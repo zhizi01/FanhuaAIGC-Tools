@@ -3,10 +3,11 @@ import { computed, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { message, Modal } from 'ant-design-vue'
 import { ArrowLeft, Plus, Pencil, Trash2, Star, Palette, Cpu } from 'lucide-vue-next'
-import { appState, saveSettings } from '../store/appState.js'
+import { useAppStore } from '../store/appState.js'
 import { genLocalId } from '../utils/id.js'
 
 const router = useRouter()
+const appStore = useAppStore()
 
 // 返回来源页：从工程内进入则回到工程，从起始页进入则回到起始页
 function goBack() {
@@ -44,13 +45,13 @@ function onContextPresetChange(v) {
   if (v !== 'custom') modelForm.contextSize = v
 }
 
-const appearance = computed(() => appState.settings.appearance)
-const models = computed(() => appState.settings.models)
+const appearance = computed(() => appStore.settings.appearance)
+const models = computed(() => appStore.settings.models)
 
 async function updateAppearance(patch) {
-  await saveSettings({
-    ...appState.settings,
-    appearance: { ...appState.settings.appearance, ...patch },
+  await appStore.saveSettings({
+    ...appStore.settings,
+    appearance: { ...appStore.settings.appearance, ...patch },
   })
 }
 
@@ -117,7 +118,7 @@ async function submitModel() {
   // 处理默认模型唯一性
   list = normalizeDefault(list, modelForm.isDefault ? (editingId.value || list[list.length - 1].id) : null)
 
-  await saveSettings({ ...appState.settings, models: list })
+  await appStore.saveSettings({ ...appStore.settings, models: list })
   message.success('已保存模型配置')
   modelModalOpen.value = false
 }
@@ -145,7 +146,7 @@ function normalizeDefault(list, forceId) {
 
 async function setDefault(m) {
   const list = normalizeDefault(models.value, m.id)
-  await saveSettings({ ...appState.settings, models: list })
+  await appStore.saveSettings({ ...appStore.settings, models: list })
 }
 
 function removeModel(m) {
@@ -158,7 +159,7 @@ function removeModel(m) {
     async onOk() {
       let list = models.value.filter((x) => x.id !== m.id)
       if (list.length && !list.find((x) => x.isDefault)) list = normalizeDefault(list, list[0].id)
-      await saveSettings({ ...appState.settings, models: list })
+      await appStore.saveSettings({ ...appStore.settings, models: list })
       message.success('已删除')
     },
   })

@@ -19,9 +19,9 @@ import {
   Download,
   LoaderCircle,
 } from 'lucide-vue-next'
-import { appState } from '../../store/appState.js'
-import { aiTask } from '../../store/aiTasks.js'
-import { addUsage } from '../../store/usage.js'
+import { useAppStore } from '../../store/appState.js'
+import { useAiTaskStore } from '../../store/aiTasks.js'
+import { useUsageStore } from '../../store/usage.js'
 import { api } from '../../services/bridge.js'
 import { genLocalId } from '../../utils/id.js'
 import { renderMarkdown, splitScriptMarkdown } from '../../utils/markdown.js'
@@ -29,7 +29,11 @@ import { optimizeEpisode } from '../../services/ai.js'
 import ScriptUpload from './ScriptUpload.vue'
 import ScriptGenerate from './ScriptGenerate.vue'
 
-const project = computed(() => appState.currentProject)
+const appStore = useAppStore()
+const aiTask = useAiTaskStore()
+const usageStore = useUsageStore()
+
+const project = computed(() => appStore.currentProject)
 
 const view = ref('library') // library | upload | generate
 
@@ -375,9 +379,9 @@ async function runAiOptimize() {
     const { markdown, usage } = await optimizeEpisode({
       episodeMarkdown: activeEpisode.value.content,
       instruction: aiInstruction.value.trim(),
-      modelId: appState.currentModelId,
+      modelId: appStore.currentModelId,
     })
-    if (project.value?.path) addUsage(project.value.path, usage)
+    if (project.value?.path) usageStore.add(project.value.path, usage)
     activeEpisode.value.content = markdown
     dirty.value = true
     mode.value = 'preview'

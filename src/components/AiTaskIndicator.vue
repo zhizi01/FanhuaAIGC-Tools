@@ -2,7 +2,9 @@
 // 全局 AI 任务状态浮标：运行中/完成/失败，跨界面常驻
 import { computed, watch, onBeforeUnmount } from 'vue'
 import { LoaderCircle, CheckCircle2, AlertCircle, X } from 'lucide-vue-next'
-import { aiTask, dismissAiTask } from '../store/aiTasks.js'
+import { useAiTaskStore } from '../store/aiTasks.js'
+
+const aiTask = useAiTaskStore()
 
 const visible = computed(() => aiTask.status !== 'idle')
 
@@ -17,8 +19,8 @@ watch(
       timer = null
     }
     // 完成/失败后自动隐藏
-    if (s === 'done') timer = setTimeout(dismissAiTask, 6000)
-    if (s === 'error') timer = setTimeout(dismissAiTask, 10000)
+    if (s === 'done') timer = setTimeout(() => aiTask.dismiss(), 6000)
+    if (s === 'error') timer = setTimeout(() => aiTask.dismiss(), 10000)
   },
 )
 
@@ -28,7 +30,7 @@ onBeforeUnmount(() => {
 
 function close() {
   if (timer) clearTimeout(timer)
-  dismissAiTask()
+  aiTask.dismiss()
 }
 </script>
 

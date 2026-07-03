@@ -1,16 +1,6 @@
-// 全局应用状态：设置、当前工程、当前模型
-import { reactive } from 'vue'
+// 全局应用状态（Pinia）：设置、当前工程、当前模型
+import { defineStore } from 'pinia'
 import { api } from '../services/bridge.js'
-
-export const appState = reactive({
-  settings: {
-    appearance: { themeMode: 'dark', primaryColor: '#1ec9b0', density: 'comfortable', background: 'grid' },
-    models: [],
-  },
-  currentProject: null,
-  currentModelId: null,
-  loaded: false,
-})
 
 // 判断当前是否应使用深色主题
 export function computeIsDark(appearance) {
@@ -31,7 +21,6 @@ function rgba(hex, a) {
   const { r, g, b } = hexToRgb(hex)
   return `rgba(${r}, ${g}, ${b}, ${a})`
 }
-// 与黑/白混合，amt 越大越接近目标色
 function mix(hex, target, amt) {
   const c = hexToRgb(hex)
   const t = hexToRgb(target)
@@ -58,46 +47,59 @@ export function applyAppearance(appearance) {
   )
 }
 
-export async function loadSettings() {
-  const s = await api.settings.get()
-  appState.settings = s
-  const def = s.models.find((m) => m.isDefault) || s.models[0]
-  appState.currentModelId = def ? def.id : null
-  applyAppearance(s.appearance)
-  appState.loaded = true
-  return s
-}
-
-export async function saveSettings(next) {
-  const saved = await api.settings.save(next)
-  appState.settings = saved
-  applyAppearance(saved.appearance)
-  // 保持当前模型选择有效
-  if (!saved.models.find((m) => m.id === appState.currentModelId)) {
-    const def = saved.models.find((m) => m.isDefault) || saved.models[0]
-    appState.currentModelId = def ? def.id : null
-  }
-  return saved
-}
-
-export function setCurrentProject(project) {
-  appState.currentProject = project
-  try {
-    if (project) sessionStorage.setItem('qs_current_project', JSON.stringify(project))
-    else sessionStorage.removeItem('qs_current_project')
-  } catch {
-    // 忽略存储异常
-  }
-}
-
-// 页面刷新后从会话中恢复当前工程
-export function restoreCurrentProject() {
-  if (appState.currentProject) return appState.currentProject
-  try {
-    const raw = sessionStorage.getItem('qs_current_project')
-    if (raw) appState.currentProject = JSON.parse(raw)
-  } catch {
-    // 忽略解析异常
-  }
-  return appState.currentProject
-}
+export const useAppStore = defineStore('app', {
+  state: () => ({
+    settings: {
+      appearance: { themeMode: 'dark', primaryColor: '#1ec9b0', density: 'comfortable', background: 'grid' },
+      models: [],
+    },
+    currentProject: null,
+    currentModelId: null,
+    loaded: false,
+  }),
+  getters: {
+    isDark: (state) => computeIsDark(state.settings.appearance),
+  },
+  actions: {
+    async loadSettings() {
+      const s = await api.settings.get()
+      this.settings = s
+      const def = s.models.find((m) => m.isDefault) || s.models[0]
+      this.currentModelId = def ? def.id : null
+      applyAppearance(s.appearance)
+      this.loaded = true
+      return s
+    },
+    async saveSettings(next) {
+      const saved = await api.settings.save(next)
+      this.settings = saved
+      applyAppearance(saved.appearance)
+      // 保持当前模型选择有效
+      if (!saved.models.find((m) => m.id === this.currentModelId)) {
+        const def = saved.models.find((m) => m.isDefault) || saved.models[0]
+        this.currentModelId = def ? def.id : null
+      }
+      return saved
+    },
+    setCurrentProject(project) {
+      this.currentProject = project
+      try {
+        if (project) sessionStorage.setItem('qs_current_project', JSON.stringify(project))
+        else sessionStorage.removeItem('qs_current_project')
+      } catch {
+        // 忽略存储异常
+      }
+    },
+    // 页面刷新后从会话中恢复当前工程
+    restoreCurrentProject() {
+      if (this.currentProject) return this.currentProject
+      try {
+        const raw = sessionStorage.getItem('qs_current_project')
+        if (raw) this.currentProject = JSON.parse(raw)
+      } catch {
+        // 忽略解析异常
+      }
+      return this.currentProject
+    },
+  },
+})

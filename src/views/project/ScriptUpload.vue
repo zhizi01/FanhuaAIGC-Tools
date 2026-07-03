@@ -4,12 +4,15 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { message } from 'ant-design-vue'
 import { ArrowLeft, FileUp, FileText, Upload } from 'lucide-vue-next'
 import { api } from '../../services/bridge.js'
-import { appState } from '../../store/appState.js'
-import { aiTask, startScriptTask } from '../../store/aiTasks.js'
+import { useAppStore } from '../../store/appState.js'
+import { useAiTaskStore } from '../../store/aiTasks.js'
 
 const emit = defineEmits(['back'])
 
-const models = computed(() => appState.settings.models || [])
+const appStore = useAppStore()
+const aiTask = useAiTaskStore()
+
+const models = computed(() => appStore.settings.models || [])
 const hasModel = computed(() => models.value.length > 0)
 
 const parsing = ref(false)
@@ -24,7 +27,7 @@ const form = reactive({
 
 onMounted(() => {
   const def =
-    models.value.find((m) => m.id === appState.currentModelId) ||
+    models.value.find((m) => m.id === appStore.currentModelId) ||
     models.value.find((m) => m.isDefault) ||
     models.value[0]
   form.modelId = def ? def.id : null
@@ -60,7 +63,7 @@ function submit() {
   if (!parsed.value) return message.warning('请先选择并解析文件')
   if (!form.title.trim()) return message.warning('请填写剧本标题')
   if (!hasModel.value) return message.warning('请先在设置页添加模型')
-  const res = startScriptTask({
+  const res = aiTask.start({
     kind: 'upload',
     title: form.title.trim(),
     params: {

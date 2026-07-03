@@ -1,5 +1,5 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
-import { appState, restoreCurrentProject } from '../store/appState.js'
+import { useAppStore } from '../store/appState.js'
 
 const routes = [
   {
@@ -33,7 +33,8 @@ const router = createRouter({
 // 进入工程页前必须已有当前工程，否则回到起始页
 router.beforeEach((to) => {
   if (to.path.startsWith('/project')) {
-    const project = appState.currentProject || restoreCurrentProject()
+    const appStore = useAppStore()
+    const project = appStore.currentProject || appStore.restoreCurrentProject()
     if (!project) return { path: '/' }
   }
   return true

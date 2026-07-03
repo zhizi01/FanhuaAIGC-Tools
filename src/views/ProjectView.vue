@@ -2,13 +2,15 @@
 import { computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { FolderKanban, ScrollText, Users, Package, Film, LogOut, Settings, Coins } from 'lucide-vue-next'
-import { appState, restoreCurrentProject } from '../store/appState.js'
-import { usage, loadUsage, formatTokens } from '../store/usage.js'
+import { useAppStore } from '../store/appState.js'
+import { useUsageStore, formatTokens } from '../store/usage.js'
 
 const route = useRoute()
 const router = useRouter()
+const appStore = useAppStore()
+const usage = useUsageStore()
 
-const project = computed(() => appState.currentProject)
+const project = computed(() => appStore.currentProject)
 
 const menus = [
   { key: 'project-home', label: '工程', path: '/project/home', icon: FolderKanban },
@@ -32,14 +34,14 @@ function openSettings() {
 }
 
 onMounted(() => {
-  restoreCurrentProject()
-  loadUsage(project.value?.path)
+  appStore.restoreCurrentProject()
+  usage.load(project.value?.path)
 })
 
 watch(
   () => project.value?.path,
   (p) => {
-    if (p) loadUsage(p)
+    if (p) usage.load(p)
   },
 )
 </script>

@@ -2,11 +2,13 @@
 import { computed } from 'vue'
 import { theme } from 'ant-design-vue'
 import zhCN from 'ant-design-vue/es/locale/zh_CN'
-import { appState, computeIsDark } from './store/appState.js'
+import { useAppStore, computeIsDark } from './store/appState.js'
 import AiTaskIndicator from './components/AiTaskIndicator.vue'
 
+const appStore = useAppStore()
+
 const themeConfig = computed(() => {
-  const appearance = appState.settings.appearance
+  const appearance = appStore.settings.appearance
   const dark = computeIsDark(appearance)
   return {
     algorithm: dark ? theme.darkAlgorithm : theme.defaultAlgorithm,
