@@ -256,6 +256,43 @@ const EXTRACT_ROLES_SYSTEM = `你是一个专业的漫剧角色分析助手。�
 4. 如果角色之间存在关系，追加“### 角色关系”小节，列出“- 对方角色：关系描述”。
 5. 只提取剧本中确实出现的角色，不要杜撰。`
 
+// AI 补全角色卡：根据已知信息与剧本，补全角色缺失字段（返回 { markdown, usage }）
+export async function completeRoleCard({ role, scriptText, modelId, signal }) {
+  const system = `你是漫剧角色卡补全助手。请根据已知信息与剧本，补全该角色缺失的字段，输出单个角色的规范化 Markdown。
+
+格式（严格遵守，只返回该角色）：
+## 角色：${role?.name || '角色'}
+- 角色定位：主角/配角/反派/路人/旁白
+- 性别：
+- 年龄：
+- 身份：
+- 性格：
+- 核心动机：
+- 外观设定：
+- 说话方式：
+- 声线：供配音/视频模型使用的声音描述
+- 标签：逗号分隔
+
+不要解释，不要使用代码块围栏。`
+  const user = `已知角色信息：
+姓名：${role?.name || ''}
+角色定位：${role?.roleType || ''}
+性别：${role?.gender || ''}　年龄：${role?.age || ''}
+身份：${role?.identity || ''}
+性格：${role?.personality || ''}
+核心动机：${role?.motivation || ''}
+外观设定：${role?.appearance || ''}
+说话方式：${role?.voice || ''}
+声线：${role?.voiceLine || ''}
+标签：${(role?.tags || []).join(', ')}
+
+剧本参考：
+${scriptText || '（无剧本参考，请根据已知信息合理补全）'}`
+
+  const { content, usage } = await chatComplete({ modelId, system, user, temperature: 0.5, signal })
+  return { markdown: stripCodeFence(content), usage }
+}
+
 // 从剧本内容提取角色（返回 { markdown, usage }）
 export async function extractRolesFromScript({ scriptText, modelId, signal }) {
   const user = `请从下面的剧本内容中提取主要角色，并按要求输出：

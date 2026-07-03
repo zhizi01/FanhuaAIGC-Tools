@@ -121,6 +121,7 @@ export function parseExtractedRoles(md) {
     else if (k.includes('性格')) role.personality = v
     else if (k.includes('动机')) role.motivation = v
     else if (k.includes('外观')) role.appearance = v
+    else if (k.includes('声线')) role.voiceLine = v
     else if (k.includes('说话') || k.includes('口吻') || k.includes('声音')) role.voice = v
     else if (k.includes('出现') || k.includes('集数')) {
       role.appearEpisodes = (v.match(/\d+/g) || []).map((n) => parseInt(n, 10))
@@ -143,6 +144,7 @@ export function parseExtractedRoles(md) {
         motivation: '',
         appearance: '',
         voice: '',
+        voiceLine: '',
         appearEpisodes: [],
         tags: [],
         relations: [],

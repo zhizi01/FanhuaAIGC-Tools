@@ -60,6 +60,8 @@ function wrapElectronApi(raw) {
       read: (payload) => raw.roles.read(toPlain(payload)),
       save: (payload) => raw.roles.save(toPlain(payload)),
       remove: (payload) => raw.roles.remove(toPlain(payload)),
+      importImages: (payload) => raw.roles.importImages(toPlain(payload)),
+      removeImage: (payload) => raw.roles.removeImage(toPlain(payload)),
     },
     assets: {
       list: (projectPath) => raw.assets.list(projectPath),
@@ -111,6 +113,8 @@ const fallbackApi = {
     read: desktopOnly('读取角色'),
     save: desktopOnly('保存角色'),
     remove: desktopOnly('删除角色'),
+    importImages: desktopOnly('上传角色形象图'),
+    removeImage: desktopOnly('删除角色形象图'),
   },
   assets: {
     list: async () => [],

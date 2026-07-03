@@ -28,6 +28,8 @@ contextBridge.exposeInMainWorld('api', {
     read: (payload) => ipcRenderer.invoke('roles:read', payload),
     save: (payload) => ipcRenderer.invoke('roles:save', payload),
     remove: (payload) => ipcRenderer.invoke('roles:remove', payload),
+    importImages: (payload) => ipcRenderer.invoke('roles:importImages', payload),
+    removeImage: (payload) => ipcRenderer.invoke('roles:removeImage', payload),
   },
   // 资产库
   assets: {

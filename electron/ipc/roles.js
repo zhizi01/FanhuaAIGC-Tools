@@ -5,6 +5,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { genId } from '../utils/id.js'
 
+const IMAGE_EXT = ['png', 'jpg', 'jpeg', 'webp', 'gif']
+
 function rolesDir(projectPath) {
   const dir = path.join(projectPath, 'roles')
   fs.mkdirSync(dir, { recursive: true })
@@ -72,8 +74,8 @@ export function registerRolesIpc() {
       appearance: role.appearance || '',
       voice: role.voice || '',
       tags: toArray(role.tags),
-      imageAssetId: role.imageAssetId || '', // 角色形象图（图片资产）
-      voiceAssetId: role.voiceAssetId || '', // 角色声线（音频资产）
+      images: toArray(role.images), // 角色形象图（工程内相对路径数组，支持多张）
+      voiceLine: role.voiceLine || '', // 角色声线（文本描述，供视频/配音模型使用）
       createdAt: role.createdAt || now,
       updatedAt: now,
     }
@@ -88,7 +90,7 @@ export function registerRolesIpc() {
       gender: meta.gender,
       age: meta.age,
       tags: meta.tags,
-      imageAssetId: meta.imageAssetId,
+      cover: meta.images[0] || '', // 列表卡片缩略图
       updatedAt: meta.updatedAt,
       dir: id,
     }
@@ -96,6 +98,35 @@ export function registerRolesIpc() {
     writeIndex(projectPath, { items: [item, ...rest] })
 
     return meta
+  })
+
+  // 上传角色形象图：复制到 roles/<roleId>/images/，返回相对工程路径数组
+  ipcMain.handle('roles:importImages', (_e, payload) => {
+    const { projectPath, roleId, filePaths } = payload || {}
+    if (!projectPath || !roleId) throw new Error('缺少工程路径或角色ID')
+    const imgDir = path.join(rolesDir(projectPath), roleId, 'images')
+    fs.mkdirSync(imgDir, { recursive: true })
+    const added = []
+    for (const fp of Array.isArray(filePaths) ? filePaths : []) {
+      if (!fp || !fs.existsSync(fp)) continue
+      const ext = path.extname(fp).slice(1).toLowerCase()
+      if (!IMAGE_EXT.includes(ext)) continue
+      const name = `${genId('img')}.${ext}`
+      fs.copyFileSync(fp, path.join(imgDir, name))
+      added.push(`roles/${roleId}/images/${name}`)
+    }
+    return added
+  })
+
+  // 删除某张角色形象图（仅删除工程内副本）
+  ipcMain.handle('roles:removeImage', (_e, payload) => {
+    const { projectPath, file } = payload || {}
+    if (!projectPath || !file) throw new Error('缺少工程路径或文件')
+    const abs = path.join(projectPath, file)
+    if (abs.startsWith(rolesDir(projectPath)) && fs.existsSync(abs)) {
+      fs.rmSync(abs, { force: true })
+    }
+    return true
   })
 
   // 删除角色目录并更新索引

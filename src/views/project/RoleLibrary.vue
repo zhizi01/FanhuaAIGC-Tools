@@ -1,11 +1,12 @@
 <script setup>
 // 角色库：当前作品的角色卡工作区（结构化 JSON 管理）
 // 左：角色列表（搜索/筛选/新建/AI提取） 右：角色卡编辑（基础字段 + 形象图 + 声线）
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { message, Modal } from 'ant-design-vue'
-import { Users, Plus, Sparkles, Save, Trash2, Search, Image as ImageIcon, Mic } from 'lucide-vue-next'
+import { Users, Plus, Sparkles, Save, Trash2, Search, ImagePlus, Wand2, X, LoaderCircle } from 'lucide-vue-next'
 import { useAppStore } from '../../store/appState.js'
 import { useUsageStore } from '../../store/usage.js'
+import { useRoleTaskStore } from '../../store/roleTasks.js'
 import { api } from '../../services/bridge.js'
 import { genLocalId } from '../../utils/id.js'
 import { parseExtractedRoles } from '../../utils/markdown.js'
@@ -14,14 +15,15 @@ import { extractRolesFromScript } from '../../services/ai.js'
 
 const appStore = useAppStore()
 const usageStore = useUsageStore()
+const roleTask = useRoleTaskStore()
 const project = computed(() => appStore.currentProject)
 
 const ROLE_TYPES = ['主角', '配角', '反派', '路人', '旁白']
 
 const roles = ref([])
-const assets = ref([])
 const loading = ref(false)
 const saving = ref(false)
+const uploadingImages = ref(false)
 
 const editing = ref(false)
 const activeRoleId = ref(null)
@@ -45,33 +47,20 @@ function blankForm() {
     motivation: '',
     appearance: '',
     voice: '',
+    voiceLine: '',
     tags: [],
-    imageAssetId: '',
-    voiceAssetId: '',
+    images: [],
     createdAt: '',
   }
 }
 
-// ---------- 资产（形象图 / 声线） ----------
-const imageAssetOptions = computed(() =>
-  assets.value.filter((a) => a.type === 'image').map((a) => ({ value: a.id, label: a.name })),
-)
-const audioAssetOptions = computed(() =>
-  assets.value.filter((a) => a.type === 'audio').map((a) => ({ value: a.id, label: a.name })),
-)
-function findAsset(id) {
-  return assets.value.find((a) => a.id === id) || null
-}
-function assetPreviewUrl(id) {
-  const a = findAsset(id)
-  return a ? assetUrl(project.value?.path, a.file) : ''
+// ---------- 形象图（多张，工程内相对路径） ----------
+function imgUrl(relFile) {
+  return assetUrl(project.value?.path, relFile)
 }
 function roleThumbUrl(r) {
-  const a = findAsset(r.imageAssetId)
-  return a ? assetUrl(project.value?.path, a.thumbnail || a.file) : ''
+  return r.cover ? assetUrl(project.value?.path, r.cover) : ''
 }
-const imagePreviewUrl = computed(() => assetPreviewUrl(form.imageAssetId))
-const voicePreviewUrl = computed(() => assetPreviewUrl(form.voiceAssetId))
 
 // ---------- 列表与筛选 ----------
 const allTags = computed(() => {
@@ -102,14 +91,90 @@ async function loadRoles() {
   }
 }
 
-async function loadAssets() {
-  if (!project.value?.path) return
+// ---------- 形象图：上传 / 删除 / AI生成(TODO) ----------
+async function uploadImages() {
+  if (!project.value?.path || !form.id) return
   try {
-    assets.value = await api.assets.list(project.value.path)
-  } catch {
-    assets.value = []
+    const filePaths = await api.dialog.selectAssetFiles()
+    if (!filePaths || !filePaths.length) return
+    uploadingImages.value = true
+    const added = await api.roles.importImages({
+      projectPath: project.value.path,
+      roleId: form.id,
+      filePaths,
+    })
+    if (added.length) {
+      form.images.push(...added)
+      markDirty()
+      message.success(`已添加 ${added.length} 张形象图，保存后生效`)
+    } else {
+      message.warning('未选择到有效图片（支持 png/jpg/jpeg/webp/gif）')
+    }
+  } catch (err) {
+    message.error('上传失败：' + err.message)
+  } finally {
+    uploadingImages.value = false
   }
 }
+
+async function removeImage(relFile) {
+  try {
+    await api.roles.removeImage({ projectPath: project.value.path, file: relFile })
+  } catch {
+    // 删文件失败不阻断，仅从列表移除
+  }
+  form.images = form.images.filter((f) => f !== relFile)
+  markDirty()
+}
+
+// TODO: 接入图片生成模型后，改为后台任务生成角色形象图
+function aiGenerateImage() {
+  message.info('AI 形象图生成能力开发中（已预留 TODO）')
+}
+
+// ---------- AI 补全角色卡（后台运行） ----------
+async function aiComplete() {
+  if (!project.value?.path) return
+  if (!form.name.trim()) return message.warning('请先填写角色名')
+  if (!(appStore.settings.models || []).length) return message.warning('请先在设置页添加模型')
+  if (dirty.value) return message.warning('有未保存的修改，请先保存后再补全')
+  let scriptText = ''
+  try {
+    const list = await api.scripts.list(project.value.path)
+    if (list.length) {
+      const data = await api.scripts.read({ projectPath: project.value.path, scriptId: list[0].id })
+      const parts = [data.overview || '']
+      ;(data.episodes || []).forEach((e) => parts.push(e.content || ''))
+      scriptText = parts.filter(Boolean).join('\n\n').slice(0, 16000)
+    }
+  } catch {
+    scriptText = ''
+  }
+  const res = roleTask.completeRole({ projectPath: project.value.path, role: { ...form }, scriptText })
+  if (!res.ok) return message.warning(res.reason)
+  message.success('已开始 AI 补全（后台进行，可继续操作）')
+}
+
+watch(
+  () => roleTask.version,
+  async () => {
+    if (roleTask.status === 'done') {
+      await loadRoles()
+      if (roleTask.resultRoleId && roleTask.resultRoleId === activeRoleId.value) {
+        try {
+          const meta = await api.roles.read({ projectPath: project.value.path, roleId: roleTask.resultRoleId })
+          applyRole(meta)
+          dirty.value = false
+        } catch {
+          // ignore
+        }
+      }
+      message.success('AI 补全完成')
+    } else if (roleTask.status === 'error') {
+      message.error('AI 补全失败：' + roleTask.error)
+    }
+  },
+)
 
 // ---------- 选择 / 新建 ----------
 function guardDirty(action) {
@@ -136,9 +201,9 @@ function applyRole(meta) {
     motivation: meta.motivation || '',
     appearance: meta.appearance || '',
     voice: meta.voice || '',
+    voiceLine: meta.voiceLine || '',
     tags: [...(meta.tags || [])],
-    imageAssetId: meta.imageAssetId || '',
-    voiceAssetId: meta.voiceAssetId || '',
+    images: [...(meta.images || [])],
     createdAt: meta.createdAt || '',
   })
 }
@@ -295,7 +360,6 @@ async function confirmImport() {
 
 onMounted(() => {
   loadRoles()
-  loadAssets()
 })
 </script>
 
@@ -379,6 +443,14 @@ onMounted(() => {
             <span v-if="dirty" class="dirty-dot">● 未保存</span>
           </div>
           <div class="toolbar-right">
+            <a-button
+              :loading="roleTask.active && roleTask.roleId === form.id"
+              :disabled="roleTask.active"
+              @click="aiComplete"
+            >
+              <template #icon><Wand2 :size="15" /></template>
+              AI补全
+            </a-button>
             <a-button danger @click="removeRole">
               <template #icon><Trash2 :size="15" /></template>
               删除
@@ -392,38 +464,8 @@ onMounted(() => {
 
         <div class="main-body">
           <div class="role-form">
-            <!-- 形象图 + 声线 -->
-            <div class="media-row">
-              <div class="media-item">
-                <div class="media-label"><ImageIcon :size="14" /> 角色形象图</div>
-                <div class="image-box">
-                  <img v-if="imagePreviewUrl" :src="imagePreviewUrl" alt="形象图" />
-                  <Users v-else :size="28" />
-                </div>
-                <a-select
-                  v-model:value="form.imageAssetId"
-                  class="w-full"
-                  allow-clear
-                  placeholder="选择图片资产"
-                  :options="imageAssetOptions"
-                  @change="markDirty"
-                />
-              </div>
-              <div class="media-item">
-                <div class="media-label"><Mic :size="14" /> 角色声线</div>
-                <div class="voice-box">
-                  <audio v-if="voicePreviewUrl" :src="voicePreviewUrl" controls />
-                  <span v-else class="voice-empty">未设置声线</span>
-                </div>
-                <a-select
-                  v-model:value="form.voiceAssetId"
-                  class="w-full"
-                  allow-clear
-                  placeholder="选择音频资产"
-                  :options="audioAssetOptions"
-                  @change="markDirty"
-                />
-              </div>
+            <div v-if="roleTask.active && roleTask.roleId === form.id" class="ai-banner">
+              <LoaderCircle :size="15" class="spin" /> AI 正在后台补全该角色信息…
             </div>
 
             <a-form layout="vertical">
@@ -453,10 +495,38 @@ onMounted(() => {
               <a-form-item label="说话方式">
                 <a-textarea v-model:value="form.voice" :rows="2" placeholder="如：语速偏慢，情绪压住时声音发紧" @change="markDirty" />
               </a-form-item>
+              <a-form-item label="角色声线（供视频/配音模型使用的文本描述）">
+                <a-textarea
+                  v-model:value="form.voiceLine"
+                  :rows="2"
+                  placeholder="如：低沉磁性的青年男声，略带沙哑，语气克制而坚定"
+                  @change="markDirty"
+                />
+              </a-form-item>
               <a-form-item label="标签">
                 <a-select v-model:value="form.tags" mode="tags" placeholder="输入后回车添加标签" @change="markDirty" />
               </a-form-item>
             </a-form>
+
+            <!-- 角色形象图（多张，上传或 AI 生成），置于底部 -->
+            <div class="images-section">
+              <div class="section-label"><ImagePlus :size="15" /> 角色形象图</div>
+              <div class="image-grid">
+                <div v-for="img in form.images" :key="img" class="image-cell">
+                  <img :src="imgUrl(img)" alt="形象图" />
+                  <button class="img-del" title="删除" @click="removeImage(img)"><X :size="14" /></button>
+                </div>
+                <button class="image-add" :disabled="uploadingImages" @click="uploadImages">
+                  <ImagePlus :size="20" />
+                  <span>{{ uploadingImages ? '上传中…' : '上传图片' }}</span>
+                </button>
+                <button class="image-add" @click="aiGenerateImage">
+                  <Wand2 :size="20" />
+                  <span>AI生成</span>
+                </button>
+              </div>
+              <div class="section-hint">支持 png / jpg / jpeg / webp / gif，可添加多张；AI 生成暂为预留能力。</div>
+            </div>
           </div>
         </div>
       </template>
@@ -753,56 +823,105 @@ onMounted(() => {
 .role-form {
   max-width: 760px;
 }
-.media-row {
+.ai-banner {
   display: flex;
-  gap: 20px;
-  margin-bottom: 18px;
-}
-.media-item {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 8px;
+  margin-bottom: 16px;
+  padding: 9px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--brand-soft);
+  color: var(--brand-color);
+  font-size: 13px;
 }
-.media-label {
+.spin {
+  animation: role-spin 0.9s linear infinite;
+}
+@keyframes role-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 底部形象图区 */
+.images-section {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border-color);
+}
+.section-label {
   display: flex;
   align-items: center;
   gap: 6px;
   font-size: 13px;
-  color: var(--text-secondary);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 12px;
 }
-.image-box {
-  width: 100%;
-  height: 150px;
+.image-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 12px;
+}
+.image-cell {
+  position: relative;
+  aspect-ratio: 1;
   border-radius: var(--radius-md);
   overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-sunken);
-  color: var(--text-tertiary);
   border: 1px solid var(--border-color);
+  background: var(--bg-sunken);
 }
-.image-box img {
+.image-cell img {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
-.voice-box {
-  height: 150px;
-  border-radius: var(--radius-md);
+.img-del {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 24px;
+  height: 24px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg-sunken);
-  border: 1px solid var(--border-color);
-  padding: 12px;
+  border: none;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.14s ease;
 }
-.voice-box audio {
-  width: 100%;
+.image-cell:hover .img-del {
+  opacity: 1;
 }
-.voice-empty {
+.image-add {
+  aspect-ratio: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.14s ease;
+}
+.image-add:hover:not(:disabled) {
+  color: var(--brand-color);
+  border-color: var(--brand-color);
+  background: var(--brand-soft);
+}
+.image-add:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.section-hint {
+  margin-top: 10px;
   font-size: 12px;
   color: var(--text-tertiary);
 }
