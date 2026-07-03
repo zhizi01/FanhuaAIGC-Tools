@@ -1,0 +1,51 @@
+/* 主题变量：浅色 / 深色，配合设置页外观配置动态切换 */
+:root {
+  --brand-color: #1677ff;
+
+  --bg-app: #f5f6f8;
+  --bg-panel: #ffffff;
+  --bg-elevated: #ffffff;
+  --bg-hover: #f0f2f5;
+  --bg-active: #e6f0ff;
+
+  --text-primary: #1f2329;
+  --text-secondary: #5a6570;
+  --text-tertiary: #8a94a0;
+
+  --border-color: #e6e8eb;
+  --border-strong: #d4d7dc;
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 16px rgba(0, 0, 0, 0.06);
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+
+  /* 界面密度 */
+  --space-unit: 16px;
+  --control-height: 36px;
+  --sidebar-width: 220px;
+}
+
+[data-theme='dark'] {
+  --bg-app: #17181c;
+  --bg-panel: #1f2127;
+  --bg-elevated: #24262d;
+  --bg-hover: #2a2d35;
+  --bg-active: #223049;
+
+  --text-primary: #e8eaed;
+  --text-secondary: #a8b0ba;
+  --text-tertiary: #737b85;
+
+  --border-color: #2c2f36;
+  --border-strong: #3a3e46;
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+[data-density='compact'] {
+  --space-unit: 10px;
+  --control-height: 30px;
+  --sidebar-width: 196px;
+}
