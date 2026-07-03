@@ -15,11 +15,12 @@ import {
   Wand2,
   FileText,
   ScrollText,
+  ListTree,
 } from 'lucide-vue-next'
 import { appState } from '../../store/appState.js'
 import { api } from '../../services/bridge.js'
 import { genLocalId } from '../../utils/id.js'
-import { renderMarkdown, buildScriptFromMarkdown } from '../../utils/markdown.js'
+import { renderMarkdown, splitScriptMarkdown, parseCompliance, extractTitle, stripCodeFence } from '../../utils/markdown.js'
 import { optimizeEpisode } from '../../services/ai.js'
 import ScriptUpload from './ScriptUpload.vue'
 import ScriptGenerate from './ScriptGenerate.vue'
@@ -298,54 +299,64 @@ async function save() {
   }
 }
 
-// ---------- 上传 / AI生成 面板完成回调 ----------
-async function buildAndSave(payload) {
-  const built = buildScriptFromMarkdown(payload.fullMarkdown, {
-    title: payload.title,
-    sourceType: payload.sourceType,
-    episodeDurationSeconds: payload.episodeDurationSeconds,
-  })
-
-  if (built._compliance.passed) {
-    const got = built.episodes.length
-    const target = payload.targetEpisodeCount
-    if (target && got < target) {
-      message.warning(`模型返回集数不足（${got}/${target}），可重试或手动补齐`)
-    } else if (target && got > target) {
-      message.warning(`模型返回集数超出（${got}/${target}），已全部保留`)
-    }
-  } else {
-    message.warning('合规检测未通过，仅保存合规检测结果')
-  }
-
+// ---------- 上传 / AI生成 面板完成回调：整体放入「总览」 ----------
+async function onPanelComplete(payload) {
+  if (!project.value?.path) return
+  const md = stripCodeFence(payload.fullMarkdown || '')
+  const compliance = parseCompliance(md)
   const script = {
-    title: built.title,
-    sourceType: built.sourceType,
-    status: built.status,
+    title: payload.title || extractTitle(md, '未命名剧本'),
+    sourceType: payload.sourceType,
+    status: compliance.passed ? '待转化' : '合规失败',
     episodeDurationSeconds: payload.episodeDurationSeconds,
-    complianceResult: built.complianceResult,
-    riskLevel: built.riskLevel,
-    overview: built.overview,
-    episodes: built.episodes,
+    complianceResult: compliance.result,
+    riskLevel: compliance.riskLevel,
+    overview: md,
+    episodes: [],
   }
 
   saving.value = true
   try {
     const meta = await api.scripts.save({ projectPath: project.value.path, script })
     await loadScripts(meta.id)
-    message.success(payload.sourceType === 'ai' ? 'AI生成完成，已保存到剧本库' : '标准化完成，已保存到剧本库')
-    return true
+    activeEpisodeNo.value = null // 定位到总览
+    view.value = 'library'
+    if (!compliance.passed) {
+      message.warning('合规检测未通过，内容已放入总览，请检查后再转化')
+    } else {
+      message.success(
+        (payload.sourceType === 'ai' ? 'AI生成完成' : '标准化完成') +
+          '，内容已放入总览，可在总览「一键转化为项目剧本」',
+      )
+    }
   } catch (err) {
     message.error('保存失败：' + err.message)
-    return false
   } finally {
     saving.value = false
   }
 }
 
-async function onPanelComplete(payload) {
-  const ok = await buildAndSave(payload)
-  if (ok) view.value = 'library'
+// ---------- 一键转化：从总览解析分集并自动建立 ----------
+async function convertOverviewToEpisodes() {
+  if (!current.value) return
+  const parsed = splitScriptMarkdown(current.value.overview || '')
+  if (!parsed.episodes.length) {
+    return message.warning('未识别到分集，请确认总览中包含“## 第1集：标题”这样的分集标题（可切到源码修改）')
+  }
+  Modal.confirm({
+    title: '一键转化为项目剧本',
+    content: `将从总览解析出 ${parsed.episodes.length} 集并自动建立分集，总览将只保留分集前的内容，确定继续吗？`,
+    okText: '转化',
+    cancelText: '取消',
+    async onOk() {
+      current.value.overview = parsed.overview
+      current.value.episodes = parsed.episodes
+      current.value.meta.status = '已转化'
+      activeEpisodeNo.value = parsed.episodes[0].episodeNo
+      dirty.value = true
+      await save()
+    },
+  })
 }
 
 // ---------- AI 优化当前集 ----------
@@ -486,21 +497,33 @@ onMounted(() => loadScripts())
             <div class="work-head-title">
               {{ isOverview ? '总览' : `第${activeEpisode?.episodeNo}集 · ${activeEpisode?.title || ''}` }}
             </div>
-            <div class="mode-switch">
-              <button class="mode-btn" :class="{ active: mode === 'preview' }" @click="mode = 'preview'">
-                <Eye :size="14" /> 预览
-              </button>
-              <button class="mode-btn" :class="{ active: mode === 'source' }" @click="mode = 'source'">
-                <Code :size="14" /> 源码
-              </button>
-              <button
-                v-if="!isOverview"
-                class="mode-btn"
-                :class="{ active: mode === 'ai' }"
-                @click="mode = 'ai'"
+            <div class="work-head-actions">
+              <a-button
+                v-if="isOverview"
+                type="primary"
+                size="small"
+                class="convert-btn"
+                @click="convertOverviewToEpisodes"
               >
-                <Wand2 :size="14" /> AI优化
-              </button>
+                <template #icon><ListTree :size="14" /></template>
+                一键转化为项目剧本
+              </a-button>
+              <div class="mode-switch">
+                <button class="mode-btn" :class="{ active: mode === 'preview' }" @click="mode = 'preview'">
+                  <Eye :size="14" /> 预览
+                </button>
+                <button class="mode-btn" :class="{ active: mode === 'source' }" @click="mode = 'source'">
+                  <Code :size="14" /> 源码
+                </button>
+                <button
+                  v-if="!isOverview"
+                  class="mode-btn"
+                  :class="{ active: mode === 'ai' }"
+                  @click="mode = 'ai'"
+                >
+                  <Wand2 :size="14" /> AI优化
+                </button>
+              </div>
             </div>
           </div>
 
@@ -856,6 +879,12 @@ onMounted(() => loadScripts())
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.work-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
 }
 .mode-switch {
   display: flex;

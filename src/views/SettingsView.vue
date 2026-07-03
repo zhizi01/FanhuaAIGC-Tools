@@ -17,6 +17,33 @@ function goBack() {
 const PRESET_COLORS = ['#1ec9b0', '#13c2c2', '#1677ff', '#722ed1', '#52c41a', '#fa8c16', '#eb2f96']
 const MAX_CONTEXT = 1000000
 
+// 常见上下文大小档位（最后追加「自定义」）
+const CONTEXT_OPTIONS = [
+  { label: '4K (4096)', value: 4096 },
+  { label: '8K (8192)', value: 8192 },
+  { label: '16K (16384)', value: 16384 },
+  { label: '32K (32768)', value: 32768 },
+  { label: '64K (65536)', value: 65536 },
+  { label: '128K (131072)', value: 131072 },
+  { label: '200K (200000)', value: 200000 },
+  { label: '256K (262144)', value: 262144 },
+  { label: '512K (524288)', value: 524288 },
+  { label: '1M (1000000)', value: 1000000 },
+]
+const contextSelectOptions = computed(() => [...CONTEXT_OPTIONS, { label: '自定义', value: 'custom' }])
+const contextPreset = ref(131072)
+
+function syncContextPreset() {
+  contextPreset.value = CONTEXT_OPTIONS.some((o) => o.value === modelForm.contextSize)
+    ? modelForm.contextSize
+    : 'custom'
+}
+
+function onContextPresetChange(v) {
+  contextPreset.value = v
+  if (v !== 'custom') modelForm.contextSize = v
+}
+
 const appearance = computed(() => appState.settings.appearance)
 const models = computed(() => appState.settings.models)
 
@@ -44,13 +71,14 @@ function resetModelForm() {
   modelForm.baseUrl = 'https://api.openai.com/v1'
   modelForm.apiKey = ''
   modelForm.modelCode = ''
-  modelForm.contextSize = 128000
+  modelForm.contextSize = 131072
   modelForm.isDefault = models.value.length === 0
 }
 
 function openAddModel() {
   editingId.value = null
   resetModelForm()
+  syncContextPreset()
   modelModalOpen.value = true
 }
 
@@ -62,6 +90,7 @@ function openEditModel(m) {
   modelForm.modelCode = m.modelCode
   modelForm.contextSize = m.contextSize
   modelForm.isDefault = m.isDefault
+  syncContextPreset()
   modelModalOpen.value = true
 }
 
@@ -70,6 +99,7 @@ async function submitModel() {
   if (!modelForm.baseUrl.trim()) return message.warning('请填写服务地址')
   if (!modelForm.modelCode.trim()) return message.warning('请填写模型代码')
   const size = Math.min(Number(modelForm.contextSize) || 0, MAX_CONTEXT)
+  if (size < 1000) return message.warning('请选择或填写有效的上下文大小')
 
   const now = new Date().toISOString()
   let list = [...models.value]
@@ -292,13 +322,20 @@ function formatContext(size) {
         <a-form-item label="模型代码" required>
           <a-input v-model:value="modelForm.modelCode" placeholder="请求时携带的 model 字段，例如 gpt-5" />
         </a-form-item>
-        <a-form-item label="上下文大小（tokens，最高 1M）">
+        <a-form-item label="上下文大小（tokens）">
+          <a-select
+            :value="contextPreset"
+            :options="contextSelectOptions"
+            @change="onContextPresetChange"
+          />
           <a-input-number
+            v-if="contextPreset === 'custom'"
             v-model:value="modelForm.contextSize"
             :min="1000"
             :max="MAX_CONTEXT"
             :step="1000"
-            style="width: 100%"
+            style="width: 100%; margin-top: 8px"
+            placeholder="输入自定义上下文大小（最高 1M）"
           />
         </a-form-item>
         <a-form-item>
