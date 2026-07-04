@@ -3,7 +3,6 @@
 // 中键拖动画布、左键框选、右键菜单；四边卡尺 + 小地图 + 缩放率。
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { VueFlow } from '@vue-flow/core'
-import { Background } from '@vue-flow/background'
 import { MiniMap } from '@vue-flow/minimap'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
@@ -306,7 +305,6 @@ onBeforeUnmount(() => {
         @pane-context-menu="openPaneMenu"
         @node-context-menu="openNodeMenu"
       >
-        <Background pattern-color="rgba(148, 163, 184, 0.18)" :gap="24" :size="1" />
         <MiniMap
           pannable
           zoomable
@@ -448,7 +446,15 @@ onBeforeUnmount(() => {
 .project-flow {
   width: 100%;
   height: 100%;
-  background: #0b0f15;
+  background-color: var(--bg-app);
+  background-image: var(--bg-pattern);
+  background-size: var(--bg-pattern-size);
+  background-position: 0 0;
+  background-repeat: repeat;
+}
+.project-flow :deep(.vue-flow__viewport),
+.project-flow :deep(.vue-flow__pane) {
+  background: transparent;
 }
 
 .project-flow :deep(.vue-flow__pane) {
@@ -515,14 +521,16 @@ onBeforeUnmount(() => {
   border: 1px solid var(--border-color);
   border-radius: 8px;
   overflow: hidden;
-  background: rgba(15, 20, 27, 0.92);
+  background: var(--bg-panel);
+  background: color-mix(in srgb, var(--bg-panel) 92%, transparent);
 }
 
 .ruler {
   position: absolute;
   z-index: 5;
   pointer-events: none;
-  background: rgba(15, 20, 27, 0.82);
+  background: var(--bg-panel);
+  background: color-mix(in srgb, var(--bg-panel) 86%, transparent);
   color: var(--text-tertiary);
   font-family: Consolas, monospace;
   font-size: 10px;
@@ -623,7 +631,8 @@ onBeforeUnmount(() => {
   border: 1px solid var(--border-color);
   border-radius: 8px;
   color: var(--text-secondary);
-  background: rgba(20, 25, 34, 0.92);
+  background: var(--bg-panel);
+  background: color-mix(in srgb, var(--bg-panel) 92%, transparent);
   box-shadow: var(--shadow-sm);
   font-size: 12px;
 }
