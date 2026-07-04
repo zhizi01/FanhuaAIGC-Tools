@@ -1,14 +1,17 @@
 <script setup>
 import { computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { Modal, message } from 'ant-design-vue'
 import { FolderKanban, ScrollText, Users, Package, Film, LogOut, Settings, Coins } from 'lucide-vue-next'
 import { useAppStore } from '../store/appState.js'
 import { useUsageStore, formatTokens } from '../store/usage.js'
+import { useFlowCanvasStore } from '../store/flowCanvas.js'
 
 const route = useRoute()
 const router = useRouter()
 const appStore = useAppStore()
 const usage = useUsageStore()
+const flowCanvas = useFlowCanvasStore()
 
 const project = computed(() => appStore.currentProject)
 
@@ -26,7 +29,34 @@ function go(item) {
 }
 
 function backToStart() {
-  router.push('/')
+  const projectPath = project.value?.path
+  if (!projectPath || !flowCanvas.dirty || flowCanvas.projectPath !== projectPath) {
+    appStore.setCurrentProject(null)
+    router.push('/')
+    return
+  }
+
+  Modal.confirm({
+    title: '幕布尚未保存',
+    content: '退出工程前是否保存当前幕布？',
+    okText: '保存并退出',
+    cancelText: '放弃修改',
+    async onOk() {
+      try {
+        await flowCanvas.saveCurrent()
+        appStore.setCurrentProject(null)
+        router.push('/')
+      } catch (err) {
+        message.error('保存幕布失败：' + err.message)
+        throw err
+      }
+    },
+    onCancel() {
+      flowCanvas.discard(projectPath)
+      appStore.setCurrentProject(null)
+      router.push('/')
+    },
+  })
 }
 
 function openSettings() {

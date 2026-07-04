@@ -40,6 +40,11 @@ contextBridge.exposeInMainWorld('api', {
     import: (payload) => ipcRenderer.invoke('assets:import', payload),
     syncGenerated: (projectPath) => ipcRenderer.invoke('assets:syncGenerated', projectPath),
   },
+  // 工程 Flow 幕布
+  flow: {
+    read: (projectPath) => ipcRenderer.invoke('flow:read', projectPath),
+    save: (payload) => ipcRenderer.invoke('flow:save', payload),
+  },
   // 系统对话框
   dialog: {
     selectProjectDir: () => ipcRenderer.invoke('dialog:selectProjectDir'),

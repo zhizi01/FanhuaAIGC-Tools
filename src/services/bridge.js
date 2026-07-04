@@ -71,6 +71,10 @@ function wrapElectronApi(raw) {
       import: (payload) => raw.assets.import(toPlain(payload)),
       syncGenerated: (projectPath) => raw.assets.syncGenerated(projectPath),
     },
+    flow: {
+      read: (projectPath) => raw.flow.read(projectPath),
+      save: (payload) => raw.flow.save(toPlain(payload)),
+    },
     dialog: {
       selectProjectDir: () => raw.dialog.selectProjectDir(),
       selectScriptFile: () => raw.dialog.selectScriptFile(),
@@ -124,6 +128,14 @@ const fallbackApi = {
     remove: desktopOnly('删除资产'),
     import: desktopOnly('导入资产'),
     syncGenerated: desktopOnly('同步项目资产'),
+  },
+  flow: {
+    read: async (projectPath) => lsGet('qs_flow_' + projectPath, null),
+    save: async ({ projectPath, canvas }) => {
+      const data = { ...canvas, savedAt: new Date().toISOString() }
+      lsSet('qs_flow_' + projectPath, data)
+      return data
+    },
   },
   dialog: {
     selectProjectDir: desktopOnly('选择工程目录'),
