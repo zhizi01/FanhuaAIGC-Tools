@@ -82,12 +82,13 @@ function toIndexItem(meta) {
     id: meta.id,
     name: meta.name,
     type: meta.type,
-    category: meta.category,
+    folder: meta.folder || meta.category || '未归档',
     file: meta.file,
     thumbnail: meta.thumbnail,
-    tags: meta.tags || [],
     linkedRoleIds: meta.linkedRoleIds || [],
     linkedEpisodes: meta.linkedEpisodes || [],
+    source: meta.source || 'import',
+    sourceRef: meta.sourceRef || '',
     updatedAt: meta.updatedAt,
   }
 }
@@ -99,7 +100,10 @@ function toArray(v) {
 export function registerAssetsIpc() {
   ipcMain.handle('assets:list', (_e, projectPath) => {
     if (!projectPath) return []
-    return readIndex(projectPath).items
+    return readIndex(projectPath).items.map((item) => ({
+      ...item,
+      folder: item.folder || item.category || '未归档',
+    }))
   })
 
   ipcMain.handle('assets:read', (_e, payload) => {
@@ -110,7 +114,7 @@ export function registerAssetsIpc() {
     return meta
   })
 
-  // 保存资产元数据（编辑名称/分类/标签/描述/关联等，不改动文件本体）
+  // 保存资产元数据（编辑名称/文件夹/描述/关联等，不改动文件本体）
   ipcMain.handle('assets:save', (_e, payload) => {
     const { projectPath, asset } = payload || {}
     if (!projectPath || !asset?.id) throw new Error('缺少工程路径或资产数据')
@@ -120,10 +124,9 @@ export function registerAssetsIpc() {
     const meta = {
       ...cur,
       name: asset.name ?? cur.name,
-      category: asset.category ?? cur.category,
+      folder: asset.folder ?? cur.folder ?? cur.category ?? '未归档',
       description: asset.description ?? cur.description,
       usage: asset.usage ?? cur.usage,
-      tags: toArray(asset.tags),
       linkedRoleIds: toArray(asset.linkedRoleIds),
       linkedEpisodes: toArray(asset.linkedEpisodes),
       updatedAt: new Date().toISOString(),
@@ -143,8 +146,9 @@ export function registerAssetsIpc() {
     const meta = readMeta(projectPath, assetId)
     const dir = assetsDir(projectPath)
     if (meta) {
-      if (meta.file) fs.rmSync(path.join(dir, meta.file), { force: true })
-      if (meta.thumbnail) fs.rmSync(path.join(dir, meta.thumbnail), { force: true })
+      // 导入资产删除工程内副本；项目生成资产只删除资产库登记，不删除原始剧本/生成内容
+      if (meta.managedFile !== false && meta.file) fs.rmSync(path.join(dir, meta.file), { force: true })
+      if (meta.managedFile !== false && meta.thumbnail) fs.rmSync(path.join(dir, meta.thumbnail), { force: true })
     }
     fs.rmSync(metaPath(projectPath, assetId), { force: true })
     const index = readIndex(projectPath)
@@ -191,15 +195,16 @@ export function registerAssetsIpc() {
         id,
         name: originalName.replace(/\.[^.]+$/, '') || '未命名资产',
         type,
-        category: '其他',
+        folder: '导入资产',
         source: 'import',
+        sourceRef: '',
+        managedFile: true,
         originalName,
         file: fileRel,
         thumbnail: thumbRel,
         mimeType: MIME[ext] || '',
         size,
         description: '',
-        tags: [],
         linkedRoleIds: [],
         linkedEpisodes: [],
         usage: '',
@@ -214,5 +219,97 @@ export function registerAssetsIpc() {
     const index = readIndex(projectPath)
     writeIndex(projectPath, { items: [...created, ...index.items] })
     return created
+  })
+
+  // 同步项目内已生成/创作的资源到资产库。第一阶段先登记剧本总览与分集 Markdown。
+  ipcMain.handle('assets:syncGenerated', (_e, projectPath) => {
+    if (!projectPath) throw new Error('缺少工程路径')
+    const now = new Date().toISOString()
+    const index = readIndex(projectPath)
+    const bySourceRef = new Map()
+    for (const item of index.items) {
+      if (item.sourceRef) bySourceRef.set(item.sourceRef, item)
+    }
+
+    const synced = []
+    const scriptsIndexFile = path.join(projectPath, 'scripts', 'index.json')
+    if (fs.existsSync(scriptsIndexFile)) {
+      let scripts = []
+      try {
+        const data = JSON.parse(fs.readFileSync(scriptsIndexFile, 'utf-8'))
+        scripts = Array.isArray(data.items) ? data.items : []
+      } catch {
+        scripts = []
+      }
+
+      for (const script of scripts) {
+        const scriptDir = path.join(projectPath, 'scripts', script.id)
+        const metaFile = path.join(scriptDir, 'meta.json')
+        if (!fs.existsSync(metaFile)) continue
+        let scriptMeta
+        try {
+          scriptMeta = JSON.parse(fs.readFileSync(metaFile, 'utf-8'))
+        } catch {
+          continue
+        }
+
+        const docs = [
+          {
+            sourceRef: `script:${script.id}:overview`,
+            name: `${scriptMeta.title || script.title || '剧本'} - 总览`,
+            file: `scripts/${script.id}/overview.md`,
+            linkedEpisodes: [],
+          },
+          ...(scriptMeta.episodes || []).map((ep) => ({
+            sourceRef: `script:${script.id}:episode:${ep.episodeNo}`,
+            name: `${scriptMeta.title || script.title || '剧本'} - 第${ep.episodeNo}集`,
+            file: `scripts/${script.id}/${ep.file}`,
+            linkedEpisodes: [ep.episodeNo],
+          })),
+        ]
+
+        for (const doc of docs) {
+          const abs = path.join(projectPath, doc.file)
+          if (!fs.existsSync(abs)) continue
+          const exists = bySourceRef.get(doc.sourceRef)
+          const id = exists?.id || genId('asset')
+          let size = 0
+          try {
+            size = fs.statSync(abs).size
+          } catch {
+            size = 0
+          }
+          const oldMeta = exists ? readMeta(projectPath, exists.id) : null
+          const meta = {
+            ...(oldMeta || {}),
+            id,
+            name: oldMeta?.name || doc.name,
+            type: 'document',
+            folder: oldMeta?.folder || '剧本',
+            source: 'generated',
+            sourceRef: doc.sourceRef,
+            managedFile: false,
+            originalName: path.basename(doc.file),
+            file: doc.file,
+            thumbnail: '',
+            mimeType: 'text/markdown',
+            size,
+            description: oldMeta?.description || '项目剧本生成/创作内容，作为文档资产统一管理。',
+            linkedRoleIds: toArray(oldMeta?.linkedRoleIds),
+            linkedEpisodes: doc.linkedEpisodes,
+            usage: oldMeta?.usage || '剧本文档',
+            createdAt: oldMeta?.createdAt || now,
+            updatedAt: now,
+          }
+          writeMeta(projectPath, meta)
+          synced.push(toIndexItem(meta))
+        }
+      }
+    }
+
+    const syncedIds = new Set(synced.map((it) => it.id))
+    const rest = index.items.filter((it) => !syncedIds.has(it.id))
+    writeIndex(projectPath, { items: [...synced, ...rest] })
+    return synced
   })
 }

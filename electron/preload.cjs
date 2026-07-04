@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('api', {
     save: (payload) => ipcRenderer.invoke('assets:save', payload),
     remove: (payload) => ipcRenderer.invoke('assets:remove', payload),
     import: (payload) => ipcRenderer.invoke('assets:import', payload),
+    syncGenerated: (projectPath) => ipcRenderer.invoke('assets:syncGenerated', projectPath),
   },
   // 系统对话框
   dialog: {

@@ -1,6 +1,6 @@
 <script setup>
 // 资产库：当前作品的素材管理
-// 左：类型/分类筛选 中：资产网格/列表 + 导入 右：资产详情编辑与预览
+// 左：类型/文件夹筛选 中：资产网格/列表 + 导入/同步 右：资产详情编辑与预览
 import { computed, onMounted, reactive, ref } from 'vue'
 import { message, Modal } from 'ant-design-vue'
 import {
@@ -15,6 +15,8 @@ import {
   LayoutGrid,
   List as ListIcon,
   Save,
+  Folder,
+  RefreshCw,
 } from 'lucide-vue-next'
 import { useAppStore } from '../../store/appState.js'
 import { api } from '../../services/bridge.js'
@@ -23,7 +25,6 @@ import { assetUrl, formatSize } from '../../utils/asset.js'
 const appStore = useAppStore()
 const project = computed(() => appStore.currentProject)
 
-const CATEGORIES = ['角色参考', '场景参考', '道具参考', '分镜参考', '音频参考', '视频参考', '剧本文档', '其他']
 const TYPE_FILTERS = [
   { value: '', label: '全部资产', icon: Package },
   { value: 'image', label: '图片', icon: ImageIcon },
@@ -35,11 +36,12 @@ const TYPE_FILTERS = [
 const assets = ref([])
 const loading = ref(false)
 const importing = ref(false)
+const syncing = ref(false)
 const saving = ref(false)
 
 const search = ref('')
 const filterType = ref('')
-const filterCategory = ref('')
+const filterFolder = ref('')
 const viewMode = ref('grid') // grid | list
 
 const detail = ref(null) // 完整 meta
@@ -47,8 +49,7 @@ const dirty = ref(false)
 const form = reactive({
   id: '',
   name: '',
-  category: '其他',
-  tags: [],
+  folder: '未归档',
   description: '',
   usage: '',
   linkedRoleIds: [],
@@ -87,10 +88,17 @@ const filteredAssets = computed(() => {
   const kw = search.value.trim().toLowerCase()
   return assets.value.filter((a) => {
     if (filterType.value && a.type !== filterType.value) return false
-    if (filterCategory.value && a.category !== filterCategory.value) return false
-    if (kw && !(a.name || '').toLowerCase().includes(kw)) return false
+    if (filterFolder.value && (a.folder || '未归档') !== filterFolder.value) return false
+    const haystack = [a.name, a.folder, a.originalName].filter(Boolean).join(' ').toLowerCase()
+    if (kw && !haystack.includes(kw)) return false
     return true
   })
+})
+
+const folderOptions = computed(() => {
+  const set = new Set(['未归档'])
+  assets.value.forEach((a) => set.add(a.folder || '未归档'))
+  return [...set].map((f) => ({ value: f, label: f }))
 })
 
 const typeCounts = computed(() => {
@@ -112,6 +120,12 @@ function typeIcon(type) {
 function thumbFor(a) {
   if (a.type === 'image') return assetUrl(project.value?.path, a.thumbnail || a.file)
   return ''
+}
+
+function sourceLabel(source) {
+  if (source === 'generated') return '项目生成'
+  if (source === 'import') return '手动导入'
+  return source || '未知'
 }
 
 const previewUrl = computed(() => (detail.value ? assetUrl(project.value?.path, detail.value.file) : ''))
@@ -145,6 +159,21 @@ async function importAssets() {
   }
 }
 
+async function syncGeneratedAssets() {
+  if (!project.value?.path) return
+  syncing.value = true
+  try {
+    const synced = await api.assets.syncGenerated(project.value.path)
+    await loadAssets()
+    message.success(`已同步 ${synced.length} 个项目资产`)
+    if (synced.length) selectAsset(synced[0].id)
+  } catch (err) {
+    message.error('同步失败：' + err.message)
+  } finally {
+    syncing.value = false
+  }
+}
+
 async function selectAsset(id) {
   if (dirty.value && detail.value && id !== detail.value.id) {
     return Modal.confirm({
@@ -166,8 +195,7 @@ async function doSelect(id) {
     Object.assign(form, {
       id: meta.id,
       name: meta.name || '',
-      category: meta.category || '其他',
-      tags: [...(meta.tags || [])],
+      folder: meta.folder || meta.category || '未归档',
       description: meta.description || '',
       usage: meta.usage || '',
       linkedRoleIds: [...(meta.linkedRoleIds || [])],
@@ -188,8 +216,7 @@ async function saveDetail() {
       asset: {
         id: form.id,
         name: form.name.trim() || '未命名资产',
-        category: form.category,
-        tags: form.tags,
+        folder: form.folder.trim() || '未归档',
         description: form.description,
         usage: form.usage,
         linkedRoleIds: form.linkedRoleIds,
@@ -210,9 +237,13 @@ function removeAsset() {
   if (!detail.value) return
   const id = detail.value.id
   const name = detail.value.name
+  const content =
+    detail.value.source === 'generated'
+      ? `确定从资产库移除「${name}」吗？这只会移除资产登记，不会删除原始项目文件。`
+      : `确定删除「${name}」吗？将删除工程内的文件副本（不影响你的原始文件）。`
   Modal.confirm({
     title: '删除资产',
-    content: `确定删除「${name}」吗？将删除工程内的文件副本（不影响你的原始文件）。`,
+    content,
     okText: '删除',
     okType: 'danger',
     cancelText: '取消',
@@ -243,7 +274,7 @@ onMounted(() => {
 
 <template>
   <div class="asset-library">
-    <!-- 左：类型 / 分类筛选 -->
+    <!-- 左：类型 / 文件夹筛选 -->
     <aside class="asset-side">
       <div class="side-label">类型</div>
       <button
@@ -258,12 +289,12 @@ onMounted(() => {
         <span class="type-count">{{ typeCounts[t.value] ?? 0 }}</span>
       </button>
 
-      <div class="side-label mt">分类</div>
+      <div class="side-label mt">文件夹</div>
       <a-select
-        v-model:value="filterCategory"
+        v-model:value="filterFolder"
         class="w-full"
         size="small"
-        :options="[{ value: '', label: '全部分类' }, ...CATEGORIES.map((c) => ({ value: c, label: c }))]"
+        :options="[{ value: '', label: '全部文件夹' }, ...folderOptions]"
       />
     </aside>
 
@@ -287,6 +318,10 @@ onMounted(() => {
             <template #icon><Upload :size="15" /></template>
             导入资产
           </a-button>
+          <a-button :loading="syncing" @click="syncGeneratedAssets">
+            <template #icon><RefreshCw :size="15" /></template>
+            同步项目资产
+          </a-button>
         </div>
       </header>
 
@@ -294,8 +329,8 @@ onMounted(() => {
         <a-spin :spinning="loading">
           <div v-if="!filteredAssets.length" class="asset-empty">
             <div class="empty-icon"><Package :size="30" /></div>
-            <h3>{{ assets.length ? '没有匹配的资产' : '还没有导入任何资产' }}</h3>
-            <p>点击右上角「导入资产」，可批量导入图片、音频、视频与文档。</p>
+            <h3>{{ assets.length ? '没有匹配的资产' : '还没有任何资产' }}</h3>
+            <p>可导入本地素材，也可以点击「同步项目资产」把剧本等生成内容纳入资产库。</p>
           </div>
 
           <!-- 网格 -->
@@ -330,7 +365,10 @@ onMounted(() => {
               </div>
               <div class="list-info">
                 <div class="list-name">{{ a.name }}</div>
-                <div class="list-meta">{{ a.category }}</div>
+                <div class="list-meta">
+                  <Folder :size="12" />
+                  <span>{{ a.folder || '未归档' }}</span>
+                </div>
               </div>
             </button>
           </div>
@@ -354,11 +392,8 @@ onMounted(() => {
         <a-form-item label="名称">
           <a-input v-model:value="form.name" @change="markDirty" />
         </a-form-item>
-        <a-form-item label="分类">
-          <a-select v-model:value="form.category" :options="CATEGORIES.map((c) => ({ value: c, label: c }))" @change="markDirty" />
-        </a-form-item>
-        <a-form-item label="标签">
-          <a-select v-model:value="form.tags" mode="tags" placeholder="输入后回车添加" @change="markDirty" />
+        <a-form-item label="文件夹">
+          <a-input v-model:value="form.folder" placeholder="如：剧本 / 角色参考 / 场景素材" @change="markDirty" />
         </a-form-item>
         <a-form-item label="用途">
           <a-input v-model:value="form.usage" placeholder="如：角色形象参考" @change="markDirty" />
@@ -388,6 +423,8 @@ onMounted(() => {
 
       <div class="detail-info">
         <div class="info-row"><span>类型</span><b>{{ detail.type }}</b></div>
+        <div class="info-row"><span>来源</span><b>{{ sourceLabel(detail.source) }}</b></div>
+        <div class="info-row"><span>文件夹</span><b>{{ detail.folder || '未归档' }}</b></div>
         <div class="info-row"><span>大小</span><b>{{ formatSize(detail.size) }}</b></div>
         <div class="info-row"><span>原始文件</span><b class="ellipsis" :title="detail.originalName">{{ detail.originalName }}</b></div>
       </div>
@@ -680,6 +717,9 @@ onMounted(() => {
   white-space: nowrap;
 }
 .list-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   font-size: 12px;
   color: var(--text-tertiary);
 }

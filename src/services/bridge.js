@@ -69,6 +69,7 @@ function wrapElectronApi(raw) {
       save: (payload) => raw.assets.save(toPlain(payload)),
       remove: (payload) => raw.assets.remove(toPlain(payload)),
       import: (payload) => raw.assets.import(toPlain(payload)),
+      syncGenerated: (projectPath) => raw.assets.syncGenerated(projectPath),
     },
     dialog: {
       selectProjectDir: () => raw.dialog.selectProjectDir(),
@@ -122,6 +123,7 @@ const fallbackApi = {
     save: desktopOnly('保存资产'),
     remove: desktopOnly('删除资产'),
     import: desktopOnly('导入资产'),
+    syncGenerated: desktopOnly('同步项目资产'),
   },
   dialog: {
     selectProjectDir: desktopOnly('选择工程目录'),
