@@ -2,7 +2,7 @@
 // 工程页：Vue Flow 画布工作台
 // 中键拖动画布、左键框选、右键菜单；四边卡尺 + 小地图 + 缩放率。
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { Handle, MarkerType, Position, VueFlow } from '@vue-flow/core'
+import { Handle, MarkerType, Position, VueFlow, getBezierPath } from '@vue-flow/core'
 import { MiniMap } from '@vue-flow/minimap'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
@@ -10,7 +10,6 @@ import '@vue-flow/minimap/dist/style.css'
 import {
   BookOpen,
   Clapperboard,
-  Crosshair,
   FileText,
   FolderKanban,
   GitBranchPlus,
@@ -92,6 +91,10 @@ const zoomPercent = computed(() => `${Math.round(viewport.zoom * 100)}%`)
 const canDeleteContext = computed(() => contextMenu.target === 'node' || selectedCount.value > 0)
 const dirty = computed(() => flowStore.projectPath === project.value?.path && flowStore.dirty)
 const currentScript = computed(() => scriptDialog.scripts[0] || null)
+const scriptPortTop = computed(() => scriptCardHeight() - 18 - 52)
+const scriptRoleHandleTop = computed(() => `${scriptPortTop.value + 11}px`)
+const scriptImageHandleTop = computed(() => `${scriptPortTop.value + 41}px`)
+const scriptLayoutHandleTop = computed(() => `${scriptPortTop.value + 41}px`)
 const episodeOptions = computed(() =>
   scriptDialog.episodes.map((e) => ({
     label: `第${e.episodeNo}集：${e.title || '未命名剧情'}`,
@@ -123,6 +126,7 @@ const verticalTicks = computed(() => {
 function makeEdge(id, source, target, extra = {}) {
   return {
     id,
+    type: 'flowing',
     source,
     target,
     markerEnd,
@@ -149,6 +153,7 @@ function normalizeNode(node) {
 function normalizeEdge(edge) {
   return {
     id: edge.id,
+    type: edge.type || 'flowing',
     source: edge.source,
     target: edge.target,
     sourceHandle: edge.sourceHandle,
@@ -175,6 +180,7 @@ function hydrateCanvas(canvas) {
   nodes.value = clone(canvas?.nodes || [])
   edges.value = clone(canvas?.edges || []).map((edge) => ({
     ...edge,
+    type: edge.type || 'flowing',
     markerEnd: edge.markerEnd || markerEnd,
     style: edge.style || { strokeWidth: 1.7 },
   }))
@@ -569,7 +575,7 @@ function countScenes(content) {
 }
 
 function scriptCardHeight() {
-  return 362
+  return 406
 }
 
 function storyboardLayoutHeight(layoutId, data) {
@@ -693,6 +699,36 @@ function addConnection(params) {
   }
 }
 
+function edgePath(props) {
+  return getBezierPath({
+    sourceX: props.sourceX,
+    sourceY: props.sourceY,
+    sourcePosition: props.sourcePosition,
+    targetX: props.targetX,
+    targetY: props.targetY,
+    targetPosition: props.targetPosition,
+  })[0]
+}
+
+function selectEdge(payload) {
+  const edgeId = payload.edge?.id
+  if (!edgeId) return
+  payload.event?.stopPropagation?.()
+  closeMenu()
+  nodes.value = nodes.value.map((node) => ({ ...node, selected: false }))
+  edges.value = edges.value.map((edge) => ({ ...edge, selected: edge.id === edgeId }))
+}
+
+function deleteEdge(payload) {
+  const edgeId = payload.edge?.id
+  if (!edgeId) return
+  payload.event?.preventDefault?.()
+  payload.event?.stopPropagation?.()
+  edges.value = edges.value.filter((edge) => edge.id !== edgeId)
+  closeMenu()
+  message.success('已删除连接')
+}
+
 function deleteContextNodes() {
   const selectedIds = selectedNodes.value.map((node) => node.id)
   const contextIsSelected = selectedIds.includes(contextMenu.nodeId)
@@ -777,14 +813,10 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <div class="board-actions">
-        <span v-if="dirty" class="dirty-pill">有未保存的幕布修改</span>
         <a-button type="primary" size="small" :loading="saving" @click="saveCanvas">
           <template #icon><Save :size="14" /></template>
           保存幕布
         </a-button>
-        <span class="hint-pill"><MousePointer2 :size="14" /> 左键框选</span>
-        <span class="hint-pill"><Crosshair :size="14" /> 中键移动</span>
-        <span class="hint-pill">右键菜单</span>
       </div>
     </header>
 
@@ -807,8 +839,29 @@ onBeforeUnmount(() => {
         @viewport-change="onViewportChange"
         @pane-context-menu="openPaneMenu"
         @node-context-menu="openNodeMenu"
+        @edge-click="selectEdge"
+        @edge-context-menu="deleteEdge"
         @connect="addConnection"
       >
+        <template #edge-flowing="edgeProps">
+          <path
+            :id="edgeProps.id"
+            class="vue-flow__edge-path flowing-edge-base"
+            :class="{ selected: edgeProps.selected }"
+            :d="edgePath(edgeProps)"
+            :marker-end="edgeProps.markerEnd"
+          />
+          <path
+            class="flowing-edge-light"
+            :class="{ selected: edgeProps.selected }"
+            :d="edgePath(edgeProps)"
+          />
+          <path
+            class="vue-flow__edge-interaction flowing-edge-hit"
+            :d="edgePath(edgeProps)"
+          />
+        </template>
+
         <template #node-script-work="{ data, selected }">
           <div class="script-card" :class="{ selected }" :style="{ minHeight: scriptCardHeight() + 'px' }">
             <div class="script-card-head">
@@ -843,21 +896,21 @@ onBeforeUnmount(() => {
               type="target"
               :position="Position.Left"
               class="script-handle role-handle"
-              :style="{ '--handle-top': '249px' }"
+              :style="{ '--handle-top': scriptRoleHandleTop }"
             />
             <Handle
               id="reference-images"
               type="target"
               :position="Position.Left"
               class="script-handle image-handle"
-              :style="{ '--handle-top': '279px' }"
+              :style="{ '--handle-top': scriptImageHandleTop }"
             />
             <Handle
               id="storyboard-layout"
               type="source"
               :position="Position.Right"
               class="script-handle shot-handle"
-              :style="{ '--handle-top': '249px' }"
+              :style="{ '--handle-top': scriptLayoutHandleTop }"
             />
           </div>
         </template>
@@ -1023,6 +1076,16 @@ onBeforeUnmount(() => {
       </div>
     </main>
 
+    <footer class="board-status">
+      <span class="status-dot" :class="{ dirty }"></span>
+      <span>{{ dirty ? '有未保存修改' : '幕布已同步' }}</span>
+      <span>{{ nodes.length }} 个节点</span>
+      <span>{{ edges.length }} 条连接</span>
+      <span>{{ zoomPercent }}</span>
+      <span v-if="selectedCount">{{ selectedCount }} 个节点已选</span>
+      <span v-else-if="edges.some((edge) => edge.selected)">连接已选中</span>
+    </footer>
+
     <a-modal
       v-model:open="scriptDialog.visible"
       title="新建剧情"
@@ -1138,6 +1201,32 @@ onBeforeUnmount(() => {
   background: var(--bg-sunken);
   font-size: 12px;
 }
+.board-status {
+  height: 30px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 18px;
+  border-top: 1px solid var(--border-color);
+  color: var(--text-tertiary);
+  background: var(--bg-panel);
+  font-size: 12px;
+}
+.board-status span {
+  flex-shrink: 0;
+}
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #22c55e;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.12);
+}
+.status-dot.dirty {
+  background: #f59e0b;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.14);
+}
 
 .flow-wrap {
   position: relative;
@@ -1172,12 +1261,35 @@ onBeforeUnmount(() => {
 .project-flow :deep(.vue-flow__edge-path) {
   stroke: rgba(154, 165, 179, 0.85);
   stroke-width: 1.7;
+  fill: none;
 }
-.project-flow :deep(.vue-flow__edge.selected .vue-flow__edge-path) {
+.project-flow :deep(.flowing-edge-base.selected) {
   stroke: var(--brand-color);
-  stroke-dasharray: 9 7;
-  animation: flow-light 0.65s linear infinite;
-  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--brand-color) 72%, transparent));
+  stroke-width: 3;
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--brand-color) 70%, transparent));
+}
+.project-flow :deep(.flowing-edge-light) {
+  fill: none;
+  pointer-events: none;
+  stroke: #f8fafc;
+  stroke-width: 3.2;
+  stroke-linecap: round;
+  stroke-dasharray: 1 18;
+  stroke-dashoffset: 0;
+  opacity: 0.78;
+  animation: flow-light 0.8s linear infinite;
+}
+.project-flow :deep(.flowing-edge-light.selected) {
+  stroke: #ffffff;
+  stroke-width: 4;
+  opacity: 0.95;
+  filter: drop-shadow(0 0 7px var(--brand-color));
+}
+.project-flow :deep(.flowing-edge-hit) {
+  fill: none;
+  pointer-events: stroke;
+  stroke: transparent;
+  stroke-width: 18;
 }
 .project-flow :deep(.vue-flow__edge.selected marker path) {
   fill: var(--brand-color);
@@ -1239,7 +1351,7 @@ onBeforeUnmount(() => {
 .script-card {
   position: relative;
   width: 360px;
-  padding: 14px 18px 44px;
+  padding: 14px 18px 92px;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   color: var(--text-primary);
@@ -1310,7 +1422,7 @@ onBeforeUnmount(() => {
   line-height: 19px;
 }
 .script-content-preview {
-  height: 118px;
+  height: 142px;
   padding: 8px 9px;
   overflow: hidden;
   border: 1px solid var(--border-color);
@@ -1323,7 +1435,7 @@ onBeforeUnmount(() => {
   font-size: 11px;
 }
 .script-content-preview pre {
-  max-height: 84px;
+  max-height: 108px;
   margin: 0;
   overflow: hidden;
   color: var(--text-secondary);
@@ -1334,7 +1446,8 @@ onBeforeUnmount(() => {
 }
 .script-port-list {
   position: absolute;
-  top: 238px;
+  top: auto;
+  bottom: 18px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1373,19 +1486,19 @@ onBeforeUnmount(() => {
   border: 2px solid var(--bg-elevated);
 }
 .project-flow :deep(.role-handle) {
-  left: -5px;
+  left: 0;
   background: #f59e0b;
 }
 .project-flow :deep(.image-handle) {
-  left: -5px;
+  left: 0;
   background: #22d3bb;
 }
 .project-flow :deep(.shot-handle) {
-  right: -5px;
+  right: 0;
   background: #a78bfa;
 }
 .project-flow :deep(.total-handle) {
-  right: -5px;
+  right: 0;
   background: #22c55e;
 }
 
@@ -1460,34 +1573,34 @@ onBeforeUnmount(() => {
   border: 2px solid var(--bg-elevated);
 }
 .project-flow :deep(.role-out) {
-  right: -5px;
+  right: 0;
   background: #f59e0b;
 }
 .project-flow :deep(.image-out) {
-  right: -5px;
+  right: 0;
   background: #22d3bb;
 }
 .project-flow :deep(.shot-out) {
-  right: -5px;
+  right: 0;
   background: #a78bfa;
 }
 .project-flow :deep(.master-in) {
-  left: -5px;
+  left: 0;
   background: #22c55e;
 }
 .project-flow :deep(.layout-script-in) {
   top: 78px;
-  left: -5px;
+  left: 0;
   background: #60a5fa;
 }
 .project-flow :deep(.layout-shot-in) {
   top: 116px;
-  left: -5px;
+  left: 0;
   background: #a78bfa;
 }
 .project-flow :deep(.master-out) {
   top: auto;
-  right: -5px;
+  right: 0;
   bottom: 19px;
   background: #22c55e;
 }
@@ -1577,7 +1690,7 @@ onBeforeUnmount(() => {
 
 @keyframes flow-light {
   to {
-    stroke-dashoffset: -32;
+    stroke-dashoffset: -19;
   }
 }
 
