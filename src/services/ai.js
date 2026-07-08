@@ -327,3 +327,63 @@ ${scriptText}`
   })
   return { markdown: stripCodeFence(content), usage }
 }
+
+// ---------- 分镜生成 ----------
+// 从模型输出中稳健地解析分镜 JSON 数组
+function parseShotsJson(text) {
+  const raw = stripCodeFence(String(text || ''))
+  let jsonText = raw
+  const start = raw.indexOf('[')
+  const end = raw.lastIndexOf(']')
+  if (start >= 0 && end > start) jsonText = raw.slice(start, end + 1)
+  let arr
+  try {
+    arr = JSON.parse(jsonText)
+  } catch {
+    throw new Error('AI 返回的分镜格式无法解析，请重试或更换模型')
+  }
+  if (!Array.isArray(arr)) throw new Error('AI 返回的分镜格式不正确')
+  return arr
+    .map((s, i) => ({
+      title: String(s.title ?? s.name ?? s['标题'] ?? `分镜 ${i + 1}`).trim().slice(0, 40),
+      duration: Number(s.duration ?? s.seconds ?? s.time ?? s['时长'] ?? 0) || 0,
+      prompt: String(s.prompt ?? s.imagePrompt ?? s['画面提示词'] ?? s['提示词'] ?? '').trim(),
+      description: String(s.description ?? s.desc ?? s.content ?? s['镜头内容'] ?? s['描述'] ?? '').trim(),
+    }))
+    .filter((s) => s.prompt || s.description || s.title)
+}
+
+const STORYBOARD_SYSTEM = `你是专业的漫剧分镜师。请根据用户提供的单集剧情与对白，把它拆解为一组合理的分镜镜头（shot）。镜头数量与每个镜头的时长，都由你根据叙事节奏和信息量自行决定。
+
+要求：
+1. 覆盖本集完整剧情，严格按时间线顺序排列。
+2. 每个镜头必须包含以下字段：
+   - title：镜头简短标题
+   - duration：镜头时长（秒，数字）
+   - prompt：用于AI图片/视频生成的详细画面提示词，需包含景别、构图、场景环境、角色外观与动作、光线、氛围、镜头运动等，尽量具体、可直接用于生成
+   - description：镜头内容说明（画面动作与对白/旁白要点）
+3. 只返回一个 JSON 数组，不要任何解释文字，不要使用代码块围栏。
+
+输出示例：
+[
+  {"title":"开场全景","duration":3,"prompt":"电影感广角全景，黄昏城市天台，男主背对镜头远眺，暖橙色逆光，轻微推镜","description":"交代场景与主角处境，旁白引入"},
+  {"title":"主角特写","duration":2,"prompt":"面部特写，眼神坚定，冷蓝夜色光，浅景深","description":"主角下定决心，台词：就今晚"}
+]`
+
+// 根据单集剧情生成分镜镜头序列（返回 { shots, usage }）
+export async function generateStoryboardShots({ episodeTitle, episodeContent, modelId, signal }) {
+  const user = `剧集标题：${episodeTitle || '未命名剧集'}
+
+剧集剧情与对白：
+${episodeContent}
+
+请把本集拆解为合理的分镜镜头序列，数量与时长由你决定，按要求的 JSON 格式输出。`
+  const { content, usage } = await chatComplete({
+    modelId,
+    system: STORYBOARD_SYSTEM,
+    user,
+    temperature: 0.7,
+    signal,
+  })
+  return { shots: parseShotsJson(content), usage }
+}

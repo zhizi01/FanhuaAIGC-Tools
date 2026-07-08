@@ -15,11 +15,13 @@ import {
   GitBranchPlus,
   GripVertical,
   Image,
+  LoaderCircle,
   LocateFixed,
   MousePointer2,
   Pencil,
   RotateCcw,
   Save,
+  Sparkles,
   Trash2,
   UserRound,
   Video,
@@ -29,11 +31,14 @@ import { message } from 'ant-design-vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '../../store/appState.js'
 import { useFlowCanvasStore } from '../../store/flowCanvas.js'
+import { useUsageStore } from '../../store/usage.js'
 import { api } from '../../services/bridge.js'
+import { generateStoryboardShots } from '../../services/ai.js'
 import { assetUrl } from '../../utils/asset.js'
 
 const appStore = useAppStore()
 const flowStore = useFlowCanvasStore()
+const usageStore = useUsageStore()
 const router = useRouter()
 const project = computed(() => appStore.currentProject || {})
 
@@ -48,6 +53,8 @@ const hydrating = ref(false)
 const normalizedSnapshot = ref('')
 const draggingShot = ref(null)
 const brokenCovers = reactive(new Set())
+const scriptDrafts = reactive({})
+const storyboardLoading = reactive({})
 
 const contextMenu = reactive({
   visible: false,
@@ -242,6 +249,17 @@ function defaultCanvas() {
   }
 }
 
+// 静默提交节点更新：用于从资源库刷新缓存字段，不触发画布"未保存"状态
+async function commitNodesSilently(nextNodes) {
+  const projectPath = project.value?.path
+  hydrating.value = true
+  nodes.value = nextNodes
+  await nextTick()
+  hydrating.value = false
+  normalizedSnapshot.value = canvasSignature()
+  if (projectPath) flowStore.syncDraft(projectPath, currentCanvas())
+}
+
 // 从角色库刷新画布上角色卡的数据，保证与角色库一致（不误标记为未保存）
 async function refreshRoleCards() {
   const projectPath = project.value?.path
@@ -293,12 +311,54 @@ async function refreshRoleCards() {
     return { ...node, data: nextData }
   })
   if (!changed) return
-  hydrating.value = true
-  nodes.value = nextNodes
-  await nextTick()
-  hydrating.value = false
-  normalizedSnapshot.value = canvasSignature()
-  flowStore.syncDraft(projectPath, currentCanvas())
+  await commitNodesSilently(nextNodes)
+}
+
+// 从剧本库刷新画布上剧情卡的内容，保证与剧本库一致（含已删除态）
+async function refreshScriptNodes() {
+  const projectPath = project.value?.path
+  if (!projectPath) return
+  const scriptNodes = nodes.value.filter((n) => n.type === 'script-work' && n.data?.scriptId)
+  if (!scriptNodes.length) return
+  const scriptIds = [...new Set(scriptNodes.map((n) => n.data.scriptId))]
+  const entries = await Promise.all(
+    scriptIds.map(async (sid) => {
+      try {
+        return [sid, await api.scripts.read({ projectPath, scriptId: sid })]
+      } catch {
+        return [sid, null]
+      }
+    }),
+  )
+  const scriptMap = new Map(entries)
+  let changed = false
+  const nextNodes = nodes.value.map((node) => {
+    if (node.type !== 'script-work' || !node.data?.scriptId) return node
+    const doc = scriptMap.get(node.data.scriptId)
+    const ep = doc ? (doc.episodes || []).find((e) => e.episodeNo === node.data.episodeNo) : null
+    if (!doc || !ep) {
+      if (node.data.missing) return node
+      changed = true
+      return { ...node, data: { ...node.data, missing: true } }
+    }
+    const content = ep.content || ''
+    const nextData = {
+      ...node.data,
+      missing: false,
+      scriptTitle: doc.meta?.title || node.data.scriptTitle,
+      episodeTitle: ep.title || node.data.episodeTitle,
+      content,
+      summary: extractEpisodeSummary(content),
+      preview: buildScriptPreview(content),
+      duration: extractEpisodeField(content, '时长'),
+      sceneCount: countScenes(content),
+    }
+    if (JSON.stringify(nextData) === JSON.stringify(node.data)) return node
+    changed = true
+    return { ...node, data: nextData }
+  })
+  if (!changed) return
+  await commitNodesSilently(nextNodes)
 }
 
 async function initializeCanvas() {
@@ -312,6 +372,7 @@ async function initializeCanvas() {
   }
   await nextTick()
   await refreshRoleCards()
+  await refreshScriptNodes()
 }
 
 function syncCanvasDraft() {
@@ -475,7 +536,7 @@ function getNodeFallbackSize(node) {
   if (node.type === 'role-card') return { width: 280, height: 224 }
   if (node.type === 'image-card') return { width: 280, height: 214 }
   if (node.type === 'storyboard-layout') return { width: 320, height: storyboardLayoutHeight(node.id, node.data) }
-  if (node.type === 'shot-node') return { width: 260, height: 160 }
+  if (node.type === 'shot-node') return { width: 280, height: 240 }
   if (node.type === 'master-output-node') return { width: 280, height: 140 }
   return { width: 170, height: 64 }
 }
@@ -683,12 +744,15 @@ function addShotNode() {
   addNode({
     id: `shot_node_${Date.now()}`,
     type: 'shot-node',
-    position: nodePosition(260),
+    position: nodePosition(280),
     class: 'shot-node',
     data: {
       title: `分镜 ${index}`,
-      desc: '单个分镜镜头，可接入分镜排布。',
       shotNo: index,
+      duration: 0,
+      prompt: '',
+      description: '单个分镜镜头，可接入分镜总览。',
+      image: '',
     },
   })
 }
@@ -769,6 +833,7 @@ function confirmScriptNode() {
       scriptTitle: script?.title || '未命名剧本',
       episodeNo: ep.episodeNo,
       episodeTitle: ep.title || '未命名剧情',
+      content: ep.content || '',
       summary: extractEpisodeSummary(ep.content),
       preview: buildScriptPreview(ep.content),
       duration: extractEpisodeField(ep.content, '时长'),
@@ -813,13 +878,81 @@ function countScenes(content) {
   return matches?.length || 0
 }
 
+function scriptDraftContent(id, data) {
+  return id in scriptDrafts ? scriptDrafts[id] : data.content || ''
+}
+
+function setScriptDraft(id, value) {
+  scriptDrafts[id] = value
+}
+
+function scriptDirty(id, data) {
+  return id in scriptDrafts && scriptDrafts[id] !== (data.content || '')
+}
+
+function updateScriptNodeData(id, content) {
+  nodes.value = nodes.value.map((node) => {
+    if (node.id !== id) return node
+    return {
+      ...node,
+      data: {
+        ...node.data,
+        content,
+        summary: extractEpisodeSummary(content),
+        preview: buildScriptPreview(content),
+        duration: extractEpisodeField(content, '时长'),
+        sceneCount: countScenes(content),
+      },
+    }
+  })
+}
+
+// 画布内直接编辑剧情，保存后写回剧本库对应剧集
+async function saveScriptNode(id, data) {
+  const projectPath = project.value?.path
+  if (!projectPath || !data.scriptId) return
+  const content = scriptDrafts[id]
+  if (content == null) return
+  try {
+    const doc = await api.scripts.read({ projectPath, scriptId: data.scriptId })
+    const episodes = doc.episodes || []
+    if (!episodes.some((e) => e.episodeNo === data.episodeNo)) {
+      return message.warning('剧本库中未找到对应剧集，请右键进入剧本中心确认')
+    }
+    await api.scripts.save({
+      projectPath,
+      script: {
+        id: doc.meta.id,
+        title: doc.meta.title,
+        sourceType: doc.meta.sourceType,
+        status: doc.meta.status,
+        episodeDurationSeconds: doc.meta.episodeDurationSeconds,
+        complianceResult: doc.meta.complianceResult,
+        riskLevel: doc.meta.riskLevel,
+        createdAt: doc.meta.createdAt,
+        overview: doc.overview,
+        episodes: episodes.map((e) => ({
+          episodeNo: e.episodeNo,
+          title: e.title,
+          content: e.episodeNo === data.episodeNo ? content : e.content,
+        })),
+      },
+    })
+    updateScriptNodeData(id, content)
+    delete scriptDrafts[id]
+    message.success('剧情已保存到剧本库')
+  } catch (err) {
+    message.error('保存剧情失败：' + err.message)
+  }
+}
+
 function scriptCardHeight() {
-  return 406
+  return 430
 }
 
 function storyboardLayoutHeight(layoutId, data) {
   const shotCount = layoutId ? layoutShotItems(layoutId, data).length : 0
-  return Math.max(246, 166 + shotCount * 36)
+  return Math.max(300, 214 + shotCount * 52)
 }
 
 function layoutShotItems(layoutId, data) {
@@ -838,7 +971,9 @@ function layoutShotItems(layoutId, data) {
       return {
         id,
         title: node.data?.title || `分镜 ${index + 1}`,
-        desc: node.data?.desc || '分镜镜头',
+        desc: node.data?.description || node.data?.desc || '',
+        image: node.data?.image || '',
+        duration: node.data?.duration || 0,
       }
     })
     .filter(Boolean)
@@ -869,6 +1004,85 @@ function dropShot(layoutId, targetShotId) {
   const [moved] = next.splice(from, 1)
   next.splice(to, 0, moved)
   setLayoutShotOrder(layoutId, next)
+}
+
+function updateShotPrompt(id, value) {
+  nodes.value = nodes.value.map((node) =>
+    node.id === id ? { ...node, data: { ...node.data, prompt: value } } : node,
+  )
+}
+
+function generateShotVideo() {
+  message.info('分镜视频生成能力开发中（已预留接口）')
+}
+
+// 一键生成分镜镜头：读取该分镜总览所连剧情 -> 调 AI 拆分 -> 生成分镜卡片并建立关联
+async function generateStoryboard(layoutId) {
+  const projectPath = project.value?.path
+  if (!projectPath || storyboardLoading[layoutId]) return
+  const scriptEdge = edges.value.find(
+    (e) => e.target === layoutId && e.targetHandle === 'layout-script-in',
+  )
+  const scriptNode = scriptEdge ? nodes.value.find((n) => n.id === scriptEdge.source) : null
+  if (!scriptNode) return message.warning('请先把一个「剧情」节点接入该分镜总览')
+  const content = scriptNode.data?.content
+  if (!content || !content.trim()) {
+    return message.warning('该剧情还没有内容，请先在剧情卡或剧本库补充')
+  }
+  if (!(appStore.settings.models || []).length) {
+    return message.warning('请先在设置页添加模型')
+  }
+  storyboardLoading[layoutId] = true
+  try {
+    const { shots, usage } = await generateStoryboardShots({
+      episodeTitle: scriptNode.data.episodeTitle || scriptNode.data.title || '',
+      episodeContent: content.slice(0, 16000),
+      modelId: appStore.currentModelId,
+    })
+    usageStore.add(projectPath, usage)
+    if (!shots.length) return message.warning('AI 未生成分镜，请重试')
+    const layout = nodes.value.find((n) => n.id === layoutId)
+    const baseX = (layout?.position?.x || 0) - 320
+    const baseY = layout?.position?.y || 0
+    const startNo = nodes.value.filter((n) => n.type === 'shot-node').length + 1
+    const stamp = Date.now()
+    const newNodes = []
+    const newEdges = []
+    const newIds = []
+    shots.forEach((shot, i) => {
+      const nodeId = `shot_node_${stamp}_${i}`
+      newIds.push(nodeId)
+      newNodes.push({
+        id: nodeId,
+        type: 'shot-node',
+        position: { x: baseX, y: baseY + i * 200 },
+        class: 'shot-node',
+        data: {
+          title: shot.title || `分镜 ${startNo + i}`,
+          shotNo: startNo + i,
+          duration: shot.duration || 0,
+          prompt: shot.prompt || '',
+          description: shot.description || '',
+          image: '',
+        },
+      })
+      newEdges.push(
+        makeEdge(`edge_${nodeId}_shot-out_${layoutId}_layout-shot-in_${stamp}_${i}`, nodeId, layoutId, {
+          sourceHandle: 'shot-out',
+          targetHandle: 'layout-shot-in',
+        }),
+      )
+    })
+    nodes.value = [...nodes.value, ...newNodes]
+    edges.value = [...edges.value, ...newEdges]
+    const currentOrder = Array.isArray(layout?.data?.shotOrder) ? layout.data.shotOrder : []
+    setLayoutShotOrder(layoutId, [...currentOrder, ...newIds])
+    message.success(`已生成 ${shots.length} 个分镜镜头并接入分镜总览`)
+  } catch (err) {
+    message.error('生成分镜失败：' + err.message)
+  } finally {
+    storyboardLoading[layoutId] = false
+  }
 }
 
 function addConnection(params) {
@@ -1029,6 +1243,8 @@ watch(
     scriptDialog.episodes = []
     scriptDialog.scriptId = ''
     scriptDialog.episodeNo = null
+    Object.keys(scriptDrafts).forEach((k) => delete scriptDrafts[k])
+    brokenCovers.clear()
     initializeCanvas()
     loadScriptChoices()
   },
@@ -1119,7 +1335,7 @@ onBeforeUnmount(() => {
         </template>
 
         <template #node-script-work="{ id, data, selected }">
-          <div class="script-card" :class="{ selected }" :style="{ minHeight: scriptCardHeight() + 'px' }">
+          <div class="script-card" :class="{ selected, 'is-missing': data.missing }" :style="{ minHeight: scriptCardHeight() + 'px' }">
             <div class="script-card-head">
               <div class="script-card-icon"><FileText :size="17" /></div>
               <div class="script-card-title">
@@ -1135,8 +1351,25 @@ onBeforeUnmount(() => {
             <p class="script-card-summary">{{ data.summary }}</p>
 
             <div class="script-content-preview">
-              <div class="preview-title">剧本内容</div>
-              <pre>{{ data.preview }}</pre>
+              <div class="preview-head">
+                <span class="preview-title">剧本内容（可直接编辑）</span>
+                <button
+                  v-if="scriptDirty(id, data)"
+                  class="preview-save nodrag"
+                  @mousedown.stop
+                  @click.stop="saveScriptNode(id, data)"
+                >
+                  <Save :size="11" /> 保存
+                </button>
+              </div>
+              <textarea
+                class="script-preview-input nodrag"
+                :value="scriptDraftContent(id, data)"
+                spellcheck="false"
+                placeholder="编辑本集剧情内容，保存后写回剧本库"
+                @input="setScriptDraft(id, $event.target.value)"
+                @mousedown.stop
+              />
             </div>
 
             <div class="script-port-list script-port-left">
@@ -1168,6 +1401,7 @@ onBeforeUnmount(() => {
               class="script-handle shot-handle"
               :style="{ '--handle-top': scriptLayoutHandleTop }"
             />
+            <div v-if="data.missing" class="script-missing-flag">剧集已在剧本库删除</div>
           </div>
         </template>
 
@@ -1219,14 +1453,37 @@ onBeforeUnmount(() => {
         </template>
 
         <template #node-shot-node="{ id, data, selected }">
-          <div class="flow-card shot-work-card" :class="{ selected }">
+          <div class="flow-card shot-node-card" :class="{ selected }">
             <Handle id="shot-out" type="source" :position="Position.Right" class="card-handle shot-out" />
             <div class="flow-card-head">
               <Clapperboard :size="17" />
               <input class="node-title-input nodrag" :value="data.title" @input="updateNodeTitle(id, $event.target.value)" />
+              <span v-if="data.duration" class="shot-duration">{{ data.duration }}s</span>
             </div>
-            <div class="flow-card-kicker">分镜镜头</div>
-            <p>{{ data.desc }}</p>
+            <div class="shot-node-thumb">
+              <img
+                v-if="data.image && !brokenCovers.has(id)"
+                :src="previewUrl(data.image)"
+                :alt="data.title"
+                @error="markCoverBroken(id)"
+              />
+              <div v-else class="shot-thumb-empty">
+                <Clapperboard :size="18" />
+                <span>画面未生成</span>
+              </div>
+            </div>
+            <div class="shot-prompt-label">分镜提示词</div>
+            <textarea
+              class="shot-prompt-input nodrag"
+              :value="data.prompt || ''"
+              spellcheck="false"
+              placeholder="编写该分镜画面提示词，或用分镜总览一键生成"
+              @input="updateShotPrompt(id, $event.target.value)"
+              @mousedown.stop
+            />
+            <button class="shot-video-btn nodrag" @mousedown.stop @click.stop="generateShotVideo(id, data)">
+              <Video :size="13" /> 生成视频
+            </button>
           </div>
         </template>
 
@@ -1260,24 +1517,41 @@ onBeforeUnmount(() => {
               <Clapperboard :size="17" />
               <input class="node-title-input nodrag" :value="data.title" @input="updateNodeTitle(id, $event.target.value)" />
             </div>
-            <div class="flow-card-kicker">分镜列表</div>
-            <p>{{ data.desc }}</p>
-            <div class="shot-list">
+            <div class="flow-card-kicker">分镜总览 · 拖动调整画面顺序</div>
+            <div class="shot-frame-list">
               <div
-                v-for="shot in layoutShotItems(id, data)"
+                v-for="(shot, idx) in layoutShotItems(id, data)"
                 :key="shot.id"
-                class="shot-row"
+                class="shot-frame-row"
                 draggable="true"
                 @dragstart="startShotDrag(id, shot.id)"
                 @dragover.prevent
                 @drop="dropShot(id, shot.id)"
               >
-                <GripVertical :size="13" />
-                <span>{{ shot.title }}</span>
-                <em>{{ shot.desc }}</em>
+                <GripVertical :size="13" class="frame-grip" />
+                <div class="shot-frame-thumb">
+                  <img v-if="shot.image" :src="previewUrl(shot.image)" :alt="shot.title" />
+                  <div v-else class="frame-black">{{ idx + 1 }}</div>
+                </div>
+                <div class="shot-frame-info">
+                  <span class="frame-title">{{ shot.title }}</span>
+                  <em v-if="shot.duration" class="frame-dur">{{ shot.duration }}s</em>
+                </div>
               </div>
-              <div v-if="!layoutShotItems(id, data).length" class="shot-empty">将分镜节点接入这里</div>
+              <div v-if="!layoutShotItems(id, data).length" class="shot-empty">
+                接入剧情后，点击下方一键生成分镜
               </div>
+            </div>
+            <button
+              class="storyboard-gen-btn nodrag"
+              :disabled="storyboardLoading[id]"
+              @mousedown.stop
+              @click.stop="generateStoryboard(id)"
+            >
+              <LoaderCircle v-if="storyboardLoading[id]" :size="14" class="sb-spin" />
+              <Sparkles v-else :size="14" />
+              {{ storyboardLoading[id] ? 'AI 生成分镜中…' : '一键生成分镜镜头' }}
+            </button>
             <div class="master-output-row">总镜头输出</div>
             <Handle id="master-output" type="source" :position="Position.Right" class="card-handle master-out" />
           </div>
@@ -1702,7 +1976,7 @@ onBeforeUnmount(() => {
   width: 320px;
 }
 .project-flow :deep(.shot-node) {
-  width: 260px;
+  width: 280px;
 }
 .project-flow :deep(.master-output-node) {
   width: 280px;
@@ -1722,6 +1996,19 @@ onBeforeUnmount(() => {
 .flow-card.selected {
   border-color: var(--brand-color);
   box-shadow: 0 0 0 2px var(--brand-soft), var(--shadow-card);
+}
+.script-card.is-missing {
+  border-color: rgba(239, 68, 68, 0.5);
+}
+.script-missing-flag {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  color: #fecaca;
+  background: rgba(239, 68, 68, 0.16);
+  font-size: 10px;
 }
 .script-card-head {
   display: flex;
@@ -1798,27 +2085,61 @@ onBeforeUnmount(() => {
   line-height: 19px;
 }
 .script-content-preview {
-  height: 142px;
+  height: 176px;
+  display: flex;
+  flex-direction: column;
   padding: 8px 9px;
   overflow: hidden;
   border: 1px solid var(--border-color);
   border-radius: 7px;
   background: var(--bg-sunken);
 }
-.preview-title {
+.preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
   margin-bottom: 5px;
+}
+.preview-title {
   color: var(--text-tertiary);
   font-size: 11px;
 }
-.script-content-preview pre {
-  max-height: 108px;
-  margin: 0;
-  overflow: hidden;
+.preview-save {
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  border: 1px solid var(--brand-color);
+  border-radius: 5px;
+  color: var(--brand-color);
+  background: var(--brand-soft);
+  font-size: 11px;
+  cursor: pointer;
+}
+.preview-save:hover {
+  color: var(--text-onbrand);
+  background: var(--brand-color);
+}
+.script-preview-input {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  resize: none;
+  overflow: auto;
+  padding: 0;
+  border: none;
+  outline: none;
   color: var(--text-secondary);
+  background: transparent;
   font-family: inherit;
   font-size: 11px;
   line-height: 17px;
   white-space: pre-wrap;
+}
+.script-preview-input:focus {
+  color: var(--text-primary);
 }
 .script-port-list {
   position: absolute;
@@ -1898,9 +2219,84 @@ onBeforeUnmount(() => {
 .image-work-card {
   min-height: 214px;
 }
-.shot-work-card {
-  min-height: 136px;
+.shot-node-card {
+  min-height: 232px;
   border-left: 3px solid #a78bfa;
+}
+.shot-duration {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 5px;
+  color: #ddd6fe;
+  background: rgba(167, 139, 250, 0.2);
+  font-size: 11px;
+}
+.shot-node-thumb {
+  height: 92px;
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  background: #000;
+}
+.shot-node-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.shot-thumb-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 11px;
+}
+.shot-prompt-label {
+  margin: 10px 0 4px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+.shot-prompt-input {
+  width: 100%;
+  height: 68px;
+  resize: none;
+  overflow: auto;
+  padding: 7px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  background: var(--bg-sunken);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.5;
+  outline: none;
+}
+.shot-prompt-input:focus {
+  border-color: var(--brand-color);
+  color: var(--text-primary);
+}
+.shot-video-btn {
+  width: 100%;
+  height: 30px;
+  margin-top: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid #a78bfa;
+  border-radius: 6px;
+  color: #ddd6fe;
+  background: rgba(167, 139, 250, 0.14);
+  font-size: 12px;
+  cursor: pointer;
+}
+.shot-video-btn:hover {
+  color: #fff;
+  background: rgba(167, 139, 250, 0.32);
 }
 .master-output-card {
   min-height: 120px;
@@ -2234,6 +2630,101 @@ onBeforeUnmount(() => {
   color: var(--text-tertiary);
   font-size: 12px;
   background: var(--bg-sunken);
+}
+.shot-frame-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  padding-right: 4px;
+}
+.shot-frame-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  background: var(--bg-sunken);
+  cursor: grab;
+}
+.shot-frame-row:active {
+  cursor: grabbing;
+}
+.frame-grip {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+.shot-frame-thumb {
+  width: 64px;
+  height: 36px;
+  flex-shrink: 0;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #000;
+}
+.shot-frame-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.frame-black {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 11px;
+}
+.shot-frame-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.frame-title {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.frame-dur {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-style: normal;
+}
+.storyboard-gen-btn {
+  width: 100%;
+  height: 34px;
+  margin-top: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: none;
+  border-radius: 7px;
+  color: var(--text-onbrand);
+  background: var(--gradient-brand);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.storyboard-gen-btn:disabled {
+  opacity: 0.75;
+  cursor: default;
+}
+.sb-spin {
+  animation: sb-spin 0.9s linear infinite;
+}
+@keyframes sb-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 .master-output-row {
   position: absolute;
