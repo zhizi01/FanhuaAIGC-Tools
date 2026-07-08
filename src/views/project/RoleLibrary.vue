@@ -2,6 +2,7 @@
 // 角色库：当前作品的角色卡工作区（结构化 JSON 管理）
 // 左：角色列表（搜索/筛选/新建/AI提取） 右：角色卡编辑（基础字段 + 形象图 + 声线）
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { message, Modal } from 'ant-design-vue'
 import { Users, Plus, Sparkles, Save, Trash2, Search, ImagePlus, Wand2, X, LoaderCircle } from 'lucide-vue-next'
 import { useAppStore } from '../../store/appState.js'
@@ -12,6 +13,8 @@ import { assetUrl } from '../../utils/asset.js'
 
 const appStore = useAppStore()
 const roleTask = useRoleTaskStore()
+const route = useRoute()
+const router = useRouter()
 const project = computed(() => appStore.currentProject)
 
 const ROLE_TYPES = ['主角', '配角', '反派', '路人', '旁白']
@@ -344,8 +347,14 @@ async function confirmImport() {
   }
 }
 
-onMounted(() => {
-  loadRoles()
+onMounted(async () => {
+  await loadRoles()
+  // 从工程画布「编辑角色」跳转而来：直接定位到对应角色并进入编辑
+  const targetRoleId = route.query.roleId
+  if (targetRoleId) {
+    router.replace({ path: '/project/roles' })
+    selectRole(String(targetRoleId))
+  }
   // 若离开期间后台提取已完成，回到角色库时展示结果
   if (roleTask.kind === 'extract' && roleTask.extractDrafts.length) openExtractResult()
 })

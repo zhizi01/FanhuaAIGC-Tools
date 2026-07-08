@@ -18,11 +18,14 @@ import {
   Folder,
   RefreshCw,
 } from 'lucide-vue-next'
+import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '../../store/appState.js'
 import { api } from '../../services/bridge.js'
 import { assetUrl, formatSize } from '../../utils/asset.js'
 
 const appStore = useAppStore()
+const route = useRoute()
+const router = useRouter()
 const project = computed(() => appStore.currentProject)
 
 const TYPE_FILTERS = [
@@ -265,10 +268,16 @@ function markDirty() {
   dirty.value = true
 }
 
-onMounted(() => {
-  loadAssets()
+onMounted(async () => {
+  await loadAssets()
   loadRoleOptions()
   loadEpisodeOptions()
+  // 从工程画布「编辑图片」跳转而来：定位到对应资产并进入编辑
+  const targetAssetId = route.query.assetId
+  if (targetAssetId) {
+    router.replace({ path: '/project/assets' })
+    selectAsset(String(targetAssetId))
+  }
 })
 </script>
 

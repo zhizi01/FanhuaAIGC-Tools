@@ -4,6 +4,7 @@
 // 「上传剧本」「AI生成」为剧本页内的独立面板视图（独立 VUE 文件）。
 import { computed, onMounted, ref, watch } from 'vue'
 import { message, Modal } from 'ant-design-vue'
+import { useRoute, useRouter } from 'vue-router'
 import {
   Upload,
   Sparkles,
@@ -32,6 +33,8 @@ import ScriptGenerate from './ScriptGenerate.vue'
 const appStore = useAppStore()
 const aiTask = useAiTaskStore()
 const usageStore = useUsageStore()
+const route = useRoute()
+const router = useRouter()
 
 const project = computed(() => appStore.currentProject)
 
@@ -393,7 +396,20 @@ async function runAiOptimize() {
   }
 }
 
-onMounted(() => loadScripts())
+onMounted(async () => {
+  await loadScripts()
+  // 从工程画布「编辑剧情」跳转而来：定位到对应剧集
+  const targetEpisode = route.query.episodeNo
+  if (targetEpisode != null && targetEpisode !== '') {
+    router.replace({ path: '/project/scripts' })
+    const no = Number(targetEpisode)
+    if (current.value?.episodes.find((e) => e.episodeNo === no)) {
+      view.value = 'library'
+      activeEpisodeNo.value = no
+      mode.value = 'preview'
+    }
+  }
+})
 </script>
 
 <template>

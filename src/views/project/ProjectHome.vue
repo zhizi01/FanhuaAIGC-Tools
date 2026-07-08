@@ -17,6 +17,7 @@ import {
   Image,
   LocateFixed,
   MousePointer2,
+  Pencil,
   RotateCcw,
   Save,
   Trash2,
@@ -25,12 +26,15 @@ import {
   ZoomIn,
 } from 'lucide-vue-next'
 import { message } from 'ant-design-vue'
+import { useRouter } from 'vue-router'
 import { useAppStore } from '../../store/appState.js'
 import { useFlowCanvasStore } from '../../store/flowCanvas.js'
 import { api } from '../../services/bridge.js'
+import { assetUrl } from '../../utils/asset.js'
 
 const appStore = useAppStore()
 const flowStore = useFlowCanvasStore()
+const router = useRouter()
 const project = computed(() => appStore.currentProject || {})
 
 const flowId = 'project-workbench-flow'
@@ -43,6 +47,7 @@ const saving = ref(false)
 const hydrating = ref(false)
 const normalizedSnapshot = ref('')
 const draggingShot = ref(null)
+const brokenCovers = reactive(new Set())
 
 const contextMenu = reactive({
   visible: false,
@@ -61,6 +66,26 @@ const scriptDialog = reactive({
   scriptId: '',
   episodes: [],
   episodeNo: null,
+  flowX: 0,
+  flowY: 0,
+})
+
+const roleDialog = reactive({
+  visible: false,
+  loading: false,
+  roles: [],
+  roleId: '',
+  flowX: 0,
+  flowY: 0,
+})
+
+const imageDialog = reactive({
+  visible: false,
+  loading: false,
+  importing: false,
+  activeTab: 'upload',
+  assets: [],
+  assetId: '',
   flowX: 0,
   flowY: 0,
 })
@@ -88,8 +113,20 @@ const edges = ref([])
 const selectedNodes = computed(() => nodes.value.filter((n) => n.selected))
 const selectedCount = computed(() => selectedNodes.value.length)
 const zoomPercent = computed(() => `${Math.round(viewport.zoom * 100)}%`)
-const canDeleteContext = computed(() => contextMenu.target === 'node' || selectedCount.value > 0)
 const dirty = computed(() => flowStore.projectPath === project.value?.path && flowStore.dirty)
+// 画布卡片可跳转到对应资源库进行编辑
+const NODE_EDIT_TARGETS = {
+  'role-card': { label: '角色', path: '/project/roles', buildQuery: (d) => ({ roleId: d.roleId }) },
+  'image-card': { label: '图片', path: '/project/assets', buildQuery: (d) => ({ assetId: d.assetId }) },
+  'script-work': {
+    label: '剧情',
+    path: '/project/scripts',
+    buildQuery: (d) => ({ scriptId: d.scriptId, episodeNo: d.episodeNo }),
+  },
+}
+const contextNode = computed(() => nodes.value.find((n) => n.id === contextMenu.nodeId) || null)
+const contextEditTarget = computed(() => NODE_EDIT_TARGETS[contextNode.value?.type] || null)
+const canEditContextNode = computed(() => !!contextEditTarget.value)
 const currentScript = computed(() => scriptDialog.scripts[0] || null)
 const scriptPortTop = computed(() => scriptCardHeight() - 18 - 52)
 const scriptRoleHandleTop = computed(() => `${scriptPortTop.value + 11}px`)
@@ -205,15 +242,76 @@ function defaultCanvas() {
   }
 }
 
+// 从角色库刷新画布上角色卡的数据，保证与角色库一致（不误标记为未保存）
+async function refreshRoleCards() {
+  const projectPath = project.value?.path
+  if (!projectPath) return
+  const roleIds = [
+    ...new Set(
+      nodes.value.filter((n) => n.type === 'role-card' && n.data?.roleId).map((n) => n.data.roleId),
+    ),
+  ]
+  if (!roleIds.length) return
+  const entries = await Promise.all(
+    roleIds.map(async (id) => {
+      try {
+        return [id, await api.roles.read({ projectPath, roleId: id })]
+      } catch {
+        return [id, null]
+      }
+    }),
+  )
+  const roleMap = new Map(entries)
+  let changed = false
+  const nextNodes = nodes.value.map((node) => {
+    if (node.type !== 'role-card' || !node.data?.roleId) return node
+    const role = roleMap.get(node.data.roleId)
+    if (!role) {
+      if (node.data.missing) return node
+      changed = true
+      return { ...node, data: { ...node.data, missing: true } }
+    }
+    const cover = roleCover(role)
+    if (cover !== node.data.cover) brokenCovers.delete(node.id)
+    const nextData = {
+      ...node.data,
+      missing: false,
+      title: role.name || '未命名角色',
+      roleType: role.roleType || '角色',
+      gender: role.gender || '',
+      age: role.age || '',
+      identity: role.identity || '',
+      personality: role.personality || '',
+      motivation: role.motivation || '',
+      appearance: role.appearance || '',
+      voice: role.voice || '',
+      cover,
+      desc: role.identity || role.personality || role.appearance || '已绑定角色库角色。',
+    }
+    if (JSON.stringify(nextData) === JSON.stringify(node.data)) return node
+    changed = true
+    return { ...node, data: nextData }
+  })
+  if (!changed) return
+  hydrating.value = true
+  nodes.value = nextNodes
+  await nextTick()
+  hydrating.value = false
+  normalizedSnapshot.value = canvasSignature()
+  flowStore.syncDraft(projectPath, currentCanvas())
+}
+
 async function initializeCanvas() {
   const projectPath = project.value?.path
   if (!projectPath) return
   if (flowStore.hasProject(projectPath)) {
     hydrateCanvas(flowStore)
-    return
+  } else {
+    const saved = await flowStore.load(projectPath)
+    hydrateCanvas(saved || defaultCanvas())
   }
-  const saved = await flowStore.load(projectPath)
-  hydrateCanvas(saved || defaultCanvas())
+  await nextTick()
+  await refreshRoleCards()
 }
 
 function syncCanvasDraft() {
@@ -374,8 +472,8 @@ function getNodeBounds(node) {
 
 function getNodeFallbackSize(node) {
   if (node.type === 'script-work') return { width: 360, height: scriptCardHeight() }
-  if (node.type === 'role-card') return { width: 250, height: 176 }
-  if (node.type === 'image-card') return { width: 250, height: 150 }
+  if (node.type === 'role-card') return { width: 280, height: 224 }
+  if (node.type === 'image-card') return { width: 280, height: 214 }
   if (node.type === 'storyboard-layout') return { width: 320, height: storyboardLayoutHeight(node.id, node.data) }
   if (node.type === 'shot-node') return { width: 260, height: 160 }
   if (node.type === 'master-output-node') return { width: 280, height: 140 }
@@ -394,35 +492,175 @@ function addNode(node) {
   closeMenu()
 }
 
-function addRoleCard() {
-  const index = nodes.value.filter((n) => n.type === 'role-card').length + 1
-  addNode({
-    id: `role_card_${Date.now()}`,
-    type: 'role-card',
-    position: nodePosition(250),
-    class: 'role-card-node',
-    data: {
-      title: `角色 ${index}`,
-      roleType: '主要角色',
-      desc: '连接到剧情的出境角色输入，提供角色外观、性格和声线参考。',
-      tags: ['外观', '性格', '声线'],
-    },
+function updateNodeTitle(nodeId, title) {
+  nodes.value = nodes.value.map((node) => {
+    if (node.id !== nodeId) return node
+    return { ...node, data: { ...node.data, title } }
   })
 }
 
-function addImageCard() {
-  const index = nodes.value.filter((n) => n.type === 'image-card').length + 1
+function previewUrl(relFile) {
+  return assetUrl(project.value?.path, relFile)
+}
+
+function markCoverBroken(id) {
+  brokenCovers.add(id)
+}
+
+function roleCover(role) {
+  return role?.cover || role?.images?.[0] || ''
+}
+
+function roleTags(data) {
+  return [data.gender, data.age].filter(Boolean)
+}
+
+function scriptTitle(data) {
+  return data.title || `第${data.episodeNo}集：${data.episodeTitle}`
+}
+
+function imageAssetThumb(asset) {
+  if (!asset || asset.type !== 'image') return ''
+  return asset.thumbnail || asset.file || ''
+}
+
+function isImagePath(filePath) {
+  return /\.(png|jpe?g|webp|gif)$/i.test(String(filePath || ''))
+}
+
+async function loadRoleChoices() {
+  if (!project.value?.path) return
+  roleDialog.loading = true
+  try {
+    roleDialog.roles = await api.roles.list(project.value.path)
+    roleDialog.roleId = roleDialog.roles[0]?.id || ''
+  } catch (err) {
+    message.error('加载角色失败：' + err.message)
+  } finally {
+    roleDialog.loading = false
+  }
+}
+
+async function addRoleCard() {
+  closeMenu()
+  Object.assign(roleDialog, {
+    visible: true,
+    flowX: contextMenu.flowX,
+    flowY: contextMenu.flowY,
+  })
+  await loadRoleChoices()
+  if (!roleDialog.roles.length) message.warning('当前工程还没有角色，请先在角色库创建角色')
+}
+
+async function confirmRoleCard() {
+  if (!roleDialog.roleId) return message.warning('请选择一个角色')
+  roleDialog.loading = true
+  try {
+    const role = await api.roles.read({ projectPath: project.value.path, roleId: roleDialog.roleId })
+    const cover = roleCover(role)
+    addNode({
+      id: `role_card_${Date.now()}`,
+      type: 'role-card',
+      position: nodePosition(280, roleDialog.flowX, roleDialog.flowY),
+      class: 'role-card-node',
+      data: {
+        title: role.name || '未命名角色',
+        roleId: role.id,
+        roleType: role.roleType || '角色',
+        gender: role.gender || '',
+        age: role.age || '',
+        identity: role.identity || '',
+        personality: role.personality || '',
+        appearance: role.appearance || '',
+        voice: role.voice || '',
+        cover,
+        desc: role.identity || role.personality || role.appearance || '已绑定角色库角色。',
+      },
+    })
+    roleDialog.visible = false
+  } catch (err) {
+    message.error('读取角色失败：' + err.message)
+  } finally {
+    roleDialog.loading = false
+  }
+}
+
+async function loadImageAssets() {
+  if (!project.value?.path) return
+  imageDialog.loading = true
+  try {
+    imageDialog.assets = (await api.assets.list(project.value.path)).filter((asset) => asset.type === 'image')
+    imageDialog.assetId = imageDialog.assets[0]?.id || ''
+  } catch (err) {
+    message.error('加载资产失败：' + err.message)
+  } finally {
+    imageDialog.loading = false
+  }
+}
+
+async function addImageCard() {
+  closeMenu()
+  Object.assign(imageDialog, {
+    visible: true,
+    activeTab: 'upload',
+    flowX: contextMenu.flowX,
+    flowY: contextMenu.flowY,
+  })
+  await loadImageAssets()
+}
+
+function createImageNode(asset) {
   addNode({
-    id: `image_card_${Date.now()}`,
+    id: `image_card_${Date.now()}_${asset.id}`,
     type: 'image-card',
-    position: nodePosition(250),
+    position: nodePosition(280, imageDialog.flowX, imageDialog.flowY),
     class: 'image-card-node',
     data: {
-      title: `参考图片 ${index}`,
-      desc: '连接到剧情的参考图片输入，用于画面、角色或场景风格参考。',
-      usage: '图片参考',
+      title: asset.name || '参考图片',
+      assetId: asset.id,
+      file: asset.file || '',
+      thumbnail: imageAssetThumb(asset),
+      folder: asset.folder || '未归档',
+      desc: asset.description || asset.usage || '已绑定资产库图片。',
+      usage: asset.usage || '图片参考',
     },
   })
+  imageDialog.visible = false
+}
+
+async function importImageForCard() {
+  if (!project.value?.path) return
+  try {
+    const filePaths = await api.dialog.selectAssetFiles()
+    if (!filePaths?.length) return
+    const imagePaths = filePaths.filter(isImagePath)
+    if (!imagePaths.length) return message.warning('请选择图片文件')
+    imageDialog.importing = true
+    const created = (await api.assets.import({ projectPath: project.value.path, filePaths: imagePaths })).filter(
+      (asset) => asset.type === 'image',
+    )
+    await loadImageAssets()
+    if (!created.length) return message.warning('未选择到图片文件')
+    createImageNode(created[0])
+    message.success(`已导入 ${created.length} 张图片`)
+  } catch (err) {
+    message.error('导入图片失败：' + err.message)
+  } finally {
+    imageDialog.importing = false
+  }
+}
+
+async function confirmImageCard() {
+  if (!imageDialog.assetId) return message.warning('请选择一张图片')
+  imageDialog.loading = true
+  try {
+    const asset = await api.assets.read({ projectPath: project.value.path, assetId: imageDialog.assetId })
+    createImageNode(asset)
+  } catch (err) {
+    message.error('读取资产失败：' + err.message)
+  } finally {
+    imageDialog.loading = false
+  }
 }
 
 function addStoryboardLayout() {
@@ -526,6 +764,7 @@ function confirmScriptNode() {
     position: nodePosition(360, scriptDialog.flowX, scriptDialog.flowY),
     class: 'script-work-node',
     data: {
+      title: `第${ep.episodeNo}集：${ep.title || '未命名剧情'}`,
       scriptId: scriptDialog.scriptId,
       scriptTitle: script?.title || '未命名剧本',
       episodeNo: ep.episodeNo,
@@ -743,6 +982,23 @@ function deleteContextNodes() {
   message.success(ids.length > 1 ? `已删除 ${ids.length} 个` : '已删除')
 }
 
+// 从画布卡片跳转到对应资源库进行编辑
+function editContextNode() {
+  const node = contextNode.value
+  const target = contextEditTarget.value
+  closeMenu()
+  if (!node || !target) return
+  const query = target.buildQuery(node.data || {})
+  const primary = Object.values(query)[0]
+  if (primary == null || primary === '') {
+    return message.warning(`该卡片未绑定${target.label}库条目，无法编辑`)
+  }
+  const cleanQuery = Object.fromEntries(
+    Object.entries(query).filter(([, v]) => v != null && v !== ''),
+  )
+  router.push({ path: target.path, query: cleanQuery })
+}
+
 function resetViewport() {
   flowInstance.value?.setViewport?.({ x: 0, y: 0, zoom: 1 }, { duration: 180 })
   closeMenu()
@@ -862,12 +1118,12 @@ onBeforeUnmount(() => {
           />
         </template>
 
-        <template #node-script-work="{ data, selected }">
+        <template #node-script-work="{ id, data, selected }">
           <div class="script-card" :class="{ selected }" :style="{ minHeight: scriptCardHeight() + 'px' }">
             <div class="script-card-head">
               <div class="script-card-icon"><FileText :size="17" /></div>
               <div class="script-card-title">
-                <strong>第{{ data.episodeNo }}集：{{ data.episodeTitle }}</strong>
+                <input class="node-title-input nodrag" :value="scriptTitle(data)" @input="updateNodeTitle(id, $event.target.value)" />
                 <span>{{ data.scriptTitle }}</span>
               </div>
             </div>
@@ -915,51 +1171,71 @@ onBeforeUnmount(() => {
           </div>
         </template>
 
-        <template #node-role-card="{ data, selected }">
-          <div class="flow-card role-work-card" :class="{ selected }">
+        <template #node-role-card="{ id, data, selected }">
+          <div class="role-node" :class="{ selected, 'is-missing': data.missing }">
             <Handle id="role-out" type="source" :position="Position.Right" class="card-handle role-out" />
-            <div class="flow-card-head">
-              <UserRound :size="17" />
-              <strong>{{ data.title }}</strong>
+            <div class="role-node-top">
+              <div class="role-node-avatar">
+                <img
+                  v-if="data.cover && !brokenCovers.has(id)"
+                  :src="previewUrl(data.cover)"
+                  :alt="data.title"
+                  @error="markCoverBroken(id)"
+                />
+                <UserRound v-else :size="24" />
+              </div>
+              <div class="role-node-heading">
+                <div class="role-node-name" :title="data.title">{{ data.title || '未命名角色' }}</div>
+                <div class="role-node-sub" :title="data.identity">{{ data.identity || '未填写身份' }}</div>
+              </div>
+              <span class="role-node-badge">{{ data.roleType || '角色' }}</span>
             </div>
-            <div class="flow-card-kicker">{{ data.roleType }}</div>
-            <p>{{ data.desc }}</p>
-            <div class="tag-row">
-              <span v-for="tag in data.tags" :key="tag">{{ tag }}</span>
+            <p class="role-node-desc">{{ data.personality || data.appearance || '未填写角色描述' }}</p>
+            <div class="role-node-foot">
+              <div class="role-node-tags">
+                <span v-for="tag in roleTags(data)" :key="tag">{{ tag }}</span>
+                <span v-if="!roleTags(data).length" class="role-node-tag-empty">未填写性别 / 年龄</span>
+              </div>
+              <span v-if="data.voice" class="role-node-voice" title="已设置声线">声线</span>
             </div>
+            <div v-if="data.missing" class="role-node-flag">该角色已在角色库中删除</div>
           </div>
         </template>
 
-        <template #node-image-card="{ data, selected }">
+        <template #node-image-card="{ id, data, selected }">
           <div class="flow-card image-work-card" :class="{ selected }">
             <Handle id="image-out" type="source" :position="Position.Right" class="card-handle image-out" />
             <div class="flow-card-head">
               <Image :size="17" />
-              <strong>{{ data.title }}</strong>
+              <input class="node-title-input nodrag" :value="data.title" @input="updateNodeTitle(id, $event.target.value)" />
+            </div>
+            <div class="image-card-preview">
+              <img v-if="data.thumbnail || data.file" :src="previewUrl(data.thumbnail || data.file)" :alt="data.title" />
+              <Image v-else :size="28" />
             </div>
             <div class="flow-card-kicker">{{ data.usage }}</div>
             <p>{{ data.desc }}</p>
           </div>
         </template>
 
-        <template #node-shot-node="{ data, selected }">
+        <template #node-shot-node="{ id, data, selected }">
           <div class="flow-card shot-work-card" :class="{ selected }">
             <Handle id="shot-out" type="source" :position="Position.Right" class="card-handle shot-out" />
             <div class="flow-card-head">
               <Clapperboard :size="17" />
-              <strong>{{ data.title }}</strong>
+              <input class="node-title-input nodrag" :value="data.title" @input="updateNodeTitle(id, $event.target.value)" />
             </div>
             <div class="flow-card-kicker">分镜镜头</div>
             <p>{{ data.desc }}</p>
           </div>
         </template>
 
-        <template #node-master-output-node="{ data, selected }">
+        <template #node-master-output-node="{ id, data, selected }">
           <div class="flow-card master-output-card" :class="{ selected }">
             <Handle id="master-in" type="target" :position="Position.Left" class="card-handle master-in" />
             <div class="flow-card-head">
               <Video :size="17" />
-              <strong>{{ data.title }}</strong>
+              <input class="node-title-input nodrag" :value="data.title" @input="updateNodeTitle(id, $event.target.value)" />
             </div>
             <div class="flow-card-kicker">最终输出</div>
             <p>{{ data.desc }}</p>
@@ -982,7 +1258,7 @@ onBeforeUnmount(() => {
             />
             <div class="flow-card-head">
               <Clapperboard :size="17" />
-              <strong>{{ data.title }}</strong>
+              <input class="node-title-input nodrag" :value="data.title" @input="updateNodeTitle(id, $event.target.value)" />
             </div>
             <div class="flow-card-kicker">分镜列表</div>
             <p>{{ data.desc }}</p>
@@ -1060,19 +1336,32 @@ onBeforeUnmount(() => {
         :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
         @click.stop
       >
-        <button @click="openScriptNodeDialog"><FileText :size="14" /> 新建剧情</button>
-        <button @click="addRoleCard"><UserRound :size="14" /> 添加角色</button>
-        <button @click="addImageCard"><Image :size="14" /> 图片节点</button>
-        <button @click="addShotNode"><Clapperboard :size="14" /> 分镜节点</button>
-        <button @click="addStoryboardLayout"><Clapperboard :size="14" /> 分镜排布</button>
-        <button @click="addMasterOutputNode"><Video :size="14" /> 总镜头输出节点</button>
-        <div class="context-separator" />
-        <button v-if="canDeleteContext" class="danger" @click="deleteContextNodes">
-          <Trash2 :size="14" /> 删除{{ selectedCount > 1 ? ` ${selectedCount} 个` : '' }}
-        </button>
-        <button @click="fitCanvas"><LocateFixed :size="14" /> 适配视图</button>
-        <button @click="resetViewport"><RotateCcw :size="14" /> 重置视图</button>
-        <button @click="clearSelection"><MousePointer2 :size="14" /> 清空选择</button>
+        <!-- 节点卡片菜单：编辑 / 删除 -->
+        <template v-if="contextMenu.target === 'node'">
+          <button v-if="canEditContextNode" @click="editContextNode">
+            <Pencil :size="14" /> 编辑{{ contextEditTarget?.label }}
+          </button>
+          <button class="danger" @click="deleteContextNodes">
+            <Trash2 :size="14" /> 删除{{ selectedCount > 1 ? ` ${selectedCount} 个` : '' }}
+          </button>
+        </template>
+
+        <!-- 画布空白处菜单：新建节点 + 视图控制 -->
+        <template v-else>
+          <button @click="openScriptNodeDialog"><FileText :size="14" /> 新建剧情</button>
+          <button @click="addRoleCard"><UserRound :size="14" /> 添加角色</button>
+          <button @click="addImageCard"><Image :size="14" /> 图片节点</button>
+          <button @click="addShotNode"><Clapperboard :size="14" /> 分镜节点</button>
+          <button @click="addStoryboardLayout"><Clapperboard :size="14" /> 分镜排布</button>
+          <button @click="addMasterOutputNode"><Video :size="14" /> 总镜头输出节点</button>
+          <div class="context-separator" />
+          <button v-if="selectedCount > 0" class="danger" @click="deleteContextNodes">
+            <Trash2 :size="14" /> 删除{{ selectedCount > 1 ? ` ${selectedCount} 个` : '' }}
+          </button>
+          <button @click="fitCanvas"><LocateFixed :size="14" /> 适配视图</button>
+          <button @click="resetViewport"><RotateCcw :size="14" /> 重置视图</button>
+          <button @click="clearSelection"><MousePointer2 :size="14" /> 清空选择</button>
+        </template>
       </div>
     </main>
 
@@ -1085,6 +1374,77 @@ onBeforeUnmount(() => {
       <span v-if="selectedCount">{{ selectedCount }} 个节点已选</span>
       <span v-else-if="edges.some((edge) => edge.selected)">连接已选中</span>
     </footer>
+
+    <a-modal
+      v-model:open="roleDialog.visible"
+      title="选择角色"
+      :confirm-loading="roleDialog.loading"
+      ok-text="添加角色卡片"
+      cancel-text="取消"
+      width="640px"
+      @ok="confirmRoleCard"
+    >
+      <div class="node-picker">
+        <a-empty v-if="!roleDialog.loading && !roleDialog.roles.length" description="角色库暂无角色" />
+        <div v-else class="picker-grid">
+          <button
+            v-for="role in roleDialog.roles"
+            :key="role.id"
+            class="picker-card"
+            :class="{ active: roleDialog.roleId === role.id }"
+            @click="roleDialog.roleId = role.id"
+          >
+            <div class="picker-thumb role-thumb">
+              <img v-if="role.cover" :src="previewUrl(role.cover)" :alt="role.name" />
+              <UserRound v-else :size="28" />
+            </div>
+            <strong>{{ role.name || '未命名角色' }}</strong>
+            <span>{{ role.roleType || '角色' }} {{ role.identity || '' }}</span>
+          </button>
+        </div>
+      </div>
+    </a-modal>
+
+    <a-modal
+      v-model:open="imageDialog.visible"
+      title="添加参考图片"
+      :confirm-loading="imageDialog.loading"
+      ok-text="添加图片卡片"
+      cancel-text="取消"
+      width="700px"
+      @ok="confirmImageCard"
+    >
+      <div class="node-picker">
+        <a-tabs v-model:activeKey="imageDialog.activeTab">
+          <a-tab-pane key="upload" tab="上传图片">
+            <div class="upload-panel">
+              <Image :size="30" />
+              <strong>上传到资产库并添加为参考图片</strong>
+              <p>支持常见图片格式，导入后会自动绑定到新的图片节点。</p>
+              <a-button type="primary" :loading="imageDialog.importing" @click="importImageForCard">选择图片</a-button>
+            </div>
+          </a-tab-pane>
+          <a-tab-pane key="library" tab="从资产库选择">
+            <a-empty v-if="!imageDialog.loading && !imageDialog.assets.length" description="资产库暂无图片" />
+            <div v-else class="picker-grid asset-picker-grid">
+              <button
+                v-for="asset in imageDialog.assets"
+                :key="asset.id"
+                class="picker-card"
+                :class="{ active: imageDialog.assetId === asset.id }"
+                @click="imageDialog.assetId = asset.id"
+              >
+                <div class="picker-thumb">
+                  <img :src="previewUrl(asset.thumbnail || asset.file)" :alt="asset.name" />
+                </div>
+                <strong>{{ asset.name || '未命名图片' }}</strong>
+                <span>{{ asset.folder || '未归档' }}</span>
+              </button>
+            </div>
+          </a-tab-pane>
+        </a-tabs>
+      </div>
+    </a-modal>
 
     <a-modal
       v-model:open="scriptDialog.visible"
@@ -1333,10 +1693,10 @@ onBeforeUnmount(() => {
   width: 360px;
 }
 .project-flow :deep(.role-card-node) {
-  width: 250px;
+  width: 280px;
 }
 .project-flow :deep(.image-card-node) {
-  width: 250px;
+  width: 280px;
 }
 .project-flow :deep(.storyboard-layout-node) {
   width: 320px;
@@ -1393,6 +1753,22 @@ onBeforeUnmount(() => {
   max-width: 276px;
   font-size: 14px;
   line-height: 20px;
+}
+.node-title-input {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  background: transparent;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 20px;
+}
+.node-title-input:focus {
+  color: var(--brand-color);
 }
 .script-card-title span {
   max-width: 276px;
@@ -1518,6 +1894,10 @@ onBeforeUnmount(() => {
 .image-work-card {
   border-left: 3px solid #22d3bb;
 }
+.role-work-card,
+.image-work-card {
+  min-height: 214px;
+}
 .shot-work-card {
   min-height: 136px;
   border-left: 3px solid #a78bfa;
@@ -1538,6 +1918,189 @@ onBeforeUnmount(() => {
   font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.flow-card-head .node-title-input {
+  flex: 1;
+}
+.role-card-body {
+  display: grid;
+  grid-template-columns: 74px 1fr;
+  gap: 10px;
+  margin-top: 12px;
+}
+.role-cover,
+.image-card-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  color: var(--text-tertiary);
+  background: var(--bg-sunken);
+}
+.role-cover {
+  width: 74px;
+  height: 82px;
+}
+.role-cover img,
+.image-card-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.role-info {
+  min-width: 0;
+}
+.role-info p {
+  height: 58px;
+  overflow: hidden;
+}
+.compact-tags {
+  margin-top: 10px;
+}
+
+/* 角色卡节点（只读角色名 + 头像容错 + 清晰字段 + 已删除态） */
+.role-node {
+  position: relative;
+  width: 280px;
+  min-height: 196px;
+  padding: 14px;
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid #f59e0b;
+  border-radius: 8px;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-card);
+}
+.role-node.selected {
+  border-color: var(--brand-color);
+  box-shadow: 0 0 0 2px var(--brand-soft), var(--shadow-card);
+}
+.role-node.is-missing {
+  border-left-color: #ef4444;
+}
+.role-node-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.role-node-avatar {
+  width: 46px;
+  height: 46px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  color: var(--text-tertiary);
+  background: var(--bg-sunken);
+}
+.role-node-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.role-node-heading {
+  flex: 1;
+  min-width: 0;
+}
+.role-node-name {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.role-node-sub {
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.role-node-badge {
+  flex-shrink: 0;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: #fff7ed;
+  background: rgba(245, 158, 11, 0.92);
+  font-size: 11px;
+  font-weight: 600;
+}
+.role-node-desc {
+  margin: 12px 0 0;
+  height: 52px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+.role-node-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 12px;
+}
+.role-node-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.role-node-tags span {
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  background: var(--bg-sunken);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.role-node-tags .role-node-tag-empty {
+  color: var(--text-tertiary);
+  border-style: dashed;
+}
+.role-node-voice {
+  flex-shrink: 0;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border: 1px solid rgba(34, 211, 187, 0.4);
+  border-radius: 6px;
+  color: #22d3bb;
+  background: rgba(34, 211, 187, 0.12);
+  font-size: 11px;
+}
+.role-node-flag {
+  margin-top: 10px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  color: #fecaca;
+  background: rgba(239, 68, 68, 0.14);
+  font-size: 11px;
+  text-align: center;
+}
+.image-card-preview {
+  width: 100%;
+  height: 92px;
+  margin-top: 12px;
 }
 .flow-card-kicker {
   margin-top: 8px;
@@ -1912,5 +2475,90 @@ onBeforeUnmount(() => {
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.6;
+}
+
+.node-picker {
+  min-height: 220px;
+}
+.picker-grid {
+  max-height: 430px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(142px, 1fr));
+  gap: 10px;
+  overflow: auto;
+  padding: 2px;
+}
+.asset-picker-grid {
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+}
+.picker-card {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  background: var(--bg-sunken);
+  cursor: pointer;
+  text-align: left;
+}
+.picker-card.active {
+  border-color: var(--brand-color);
+  box-shadow: 0 0 0 2px var(--brand-soft);
+}
+.picker-card strong,
+.picker-card span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.picker-card strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.picker-card span {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+.picker-thumb {
+  height: 96px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 7px;
+  color: var(--text-tertiary);
+  background: var(--bg-elevated);
+}
+.picker-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.role-thumb {
+  height: 118px;
+}
+.upload-panel {
+  min-height: 238px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 1px dashed var(--border-color);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  background: var(--bg-sunken);
+  text-align: center;
+}
+.upload-panel strong {
+  color: var(--text-primary);
+}
+.upload-panel p {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 12px;
 }
 </style>
