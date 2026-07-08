@@ -55,6 +55,7 @@ const draggingShot = ref(null)
 const brokenCovers = reactive(new Set())
 const scriptDrafts = reactive({})
 const storyboardLoading = reactive({})
+const roleOptions = ref([])
 
 const contextMenu = reactive({
   visible: false,
@@ -815,6 +816,21 @@ function addMasterOutputNode() {
   })
 }
 
+// 加载全部角色，供分镜提示词的 @ 提及使用
+async function loadRoleOptions() {
+  const projectPath = project.value?.path
+  if (!projectPath) {
+    roleOptions.value = []
+    return
+  }
+  try {
+    const roles = await api.roles.list(projectPath)
+    roleOptions.value = roles.map((r) => ({ value: r.name, label: r.name })).filter((o) => o.value)
+  } catch {
+    roleOptions.value = []
+  }
+}
+
 async function loadScriptChoices() {
   if (!project.value?.path) return
   scriptDialog.loading = true
@@ -1375,6 +1391,7 @@ watch(
     brokenCovers.clear()
     initializeCanvas()
     loadScriptChoices()
+    loadRoleOptions()
   },
 )
 
@@ -1392,6 +1409,7 @@ onMounted(() => {
   window.addEventListener('click', closeMenu)
   initializeCanvas()
   loadScriptChoices()
+  loadRoleOptions()
 })
 
 onBeforeUnmount(() => {
@@ -1604,15 +1622,16 @@ onBeforeUnmount(() => {
                 <span>视频未生成</span>
               </div>
             </div>
-            <div class="shot-prompt-label">分镜提示词</div>
-            <textarea
-              class="shot-prompt-input nodrag"
-              :value="data.prompt || ''"
-              spellcheck="false"
-              placeholder="编写该分镜画面提示词，或用分镜总览一键生成"
-              @input="updateShotPrompt(id, $event.target.value)"
-              @mousedown.stop
-            />
+            <div class="shot-prompt-label">分镜提示词（输入 @ 提及角色）</div>
+            <div class="shot-prompt-mentions nodrag" @mousedown.stop>
+              <a-mentions
+                :value="data.prompt || ''"
+                :options="roleOptions"
+                :rows="4"
+                placeholder="编写分镜提示词，输入 @ 提及关联角色"
+                @change="(val) => updateShotPrompt(id, val)"
+              />
+            </div>
             <button class="shot-video-btn nodrag" @mousedown.stop @click.stop="generateShotVideo(id, data)">
               <Video :size="13" /> 生成视频
             </button>
@@ -2458,24 +2477,18 @@ onBeforeUnmount(() => {
   color: var(--text-tertiary);
   font-size: 11px;
 }
-.shot-prompt-input {
+.shot-prompt-mentions {
   width: 100%;
-  height: 68px;
-  resize: none;
-  overflow: auto;
+}
+.shot-prompt-mentions :deep(.ant-mentions) {
+  width: 100%;
+  font-size: 11px;
+}
+.shot-prompt-mentions :deep(.ant-mentions > textarea) {
+  min-height: 78px;
   padding: 7px 8px;
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  color: var(--text-secondary);
-  background: var(--bg-sunken);
-  font-family: inherit;
   font-size: 11px;
   line-height: 1.5;
-  outline: none;
-}
-.shot-prompt-input:focus {
-  border-color: var(--brand-color);
-  color: var(--text-primary);
 }
 .shot-video-btn {
   width: 100%;
