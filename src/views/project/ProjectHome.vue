@@ -524,6 +524,15 @@ function finishBoxSelect() {
   }
   boxSelect.active = false
   boxSelect.additive = false
+  // 框选结束后浏览器会在画布上合成一次 click，Vue Flow 的 pane onClick 会清空选择，
+  // 这里在捕获阶段吞掉这一次 click，避免刚框选中的卡片被立即取消选中
+  if (hasArea) suppressNextPaneClick()
+}
+
+function suppressNextPaneClick() {
+  const swallow = (event) => event.stopPropagation()
+  window.addEventListener('click', swallow, true)
+  setTimeout(() => window.removeEventListener('click', swallow, true), 0)
 }
 
 function absolutePosition(node) {
