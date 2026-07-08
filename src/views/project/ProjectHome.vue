@@ -99,6 +99,7 @@ const imageDialog = reactive({
 
 const boxSelect = reactive({
   active: false,
+  additive: false,
   startX: 0,
   startY: 0,
   x: 0,
@@ -134,6 +135,7 @@ const NODE_EDIT_TARGETS = {
 const contextNode = computed(() => nodes.value.find((n) => n.id === contextMenu.nodeId) || null)
 const contextEditTarget = computed(() => NODE_EDIT_TARGETS[contextNode.value?.type] || null)
 const canEditContextNode = computed(() => !!contextEditTarget.value)
+const contextIsGroup = computed(() => contextNode.value?.type === 'group')
 const currentScript = computed(() => scriptDialog.scripts[0] || null)
 const scriptPortTop = computed(() => scriptCardHeight() - 18 - 52)
 const scriptRoleHandleTop = computed(() => `${scriptPortTop.value + 11}px`)
@@ -184,7 +186,7 @@ function clone(value) {
 }
 
 function normalizeNode(node) {
-  return {
+  const out = {
     id: node.id,
     type: node.type,
     label: node.label,
@@ -192,6 +194,9 @@ function normalizeNode(node) {
     class: node.class,
     data: node.data || {},
   }
+  if (node.parentNode) out.parentNode = node.parentNode
+  if (node.style) out.style = node.style
+  return out
 }
 
 function normalizeEdge(edge) {
@@ -474,7 +479,7 @@ function beginBoxSelect(event) {
   closeMenu()
   const x = event.clientX - rect.left
   const y = event.clientY - rect.top
-  Object.assign(boxSelect, { active: true, startX: x, startY: y, x, y, width: 0, height: 0 })
+  Object.assign(boxSelect, { active: true, additive: event.shiftKey, startX: x, startY: y, x, y, width: 0, height: 0 })
   window.addEventListener('mousemove', updateBoxSelect)
   window.addEventListener('mouseup', finishBoxSelect, { once: true })
 }
@@ -501,28 +506,57 @@ function finishBoxSelect() {
     bottom: boxSelect.y + boxSelect.height,
   }
   const hasArea = boxSelect.width > 3 && boxSelect.height > 3
+  const additive = boxSelect.additive
   nodes.value = nodes.value.map((node) => {
+    if (node.type === 'group') return additive ? node : { ...node, selected: false }
     const bounds = getNodeBounds(node)
-    const selected =
+    const inRange =
       hasArea &&
       bounds.right >= selection.left &&
       bounds.left <= selection.right &&
       bounds.bottom >= selection.top &&
       bounds.top <= selection.bottom
+    const selected = additive ? node.selected || inRange : inRange
     return { ...node, selected }
   })
-  if (hasArea) {
+  if (hasArea && !additive) {
     edges.value = edges.value.map((edge) => ({ ...edge, selected: false }))
   }
   boxSelect.active = false
+  boxSelect.additive = false
+}
+
+function absolutePosition(node) {
+  let x = node.position.x
+  let y = node.position.y
+  let parentId = node.parentNode
+  const seen = new Set()
+  while (parentId && !seen.has(parentId)) {
+    seen.add(parentId)
+    const parent = nodes.value.find((n) => n.id === parentId)
+    if (!parent) break
+    x += parent.position.x
+    y += parent.position.y
+    parentId = parent.parentNode
+  }
+  return { x, y }
+}
+
+function nodeSize(node) {
+  const fallback = getNodeFallbackSize(node)
+  return {
+    width: node.dimensions?.width || fallback.width,
+    height: node.dimensions?.height || fallback.height,
+  }
 }
 
 function getNodeBounds(node) {
-  const fallback = getNodeFallbackSize(node)
-  const nodeLeft = node.position.x * viewport.zoom + viewport.x
-  const nodeTop = node.position.y * viewport.zoom + viewport.y
-  const nodeWidth = (node.dimensions?.width || fallback.width) * viewport.zoom
-  const nodeHeight = (node.dimensions?.height || fallback.height) * viewport.zoom
+  const abs = absolutePosition(node)
+  const size = nodeSize(node)
+  const nodeLeft = abs.x * viewport.zoom + viewport.x
+  const nodeTop = abs.y * viewport.zoom + viewport.y
+  const nodeWidth = size.width * viewport.zoom
+  const nodeHeight = size.height * viewport.zoom
   return {
     left: nodeLeft,
     top: nodeTop,
@@ -1190,7 +1224,22 @@ function deleteContextNodes() {
     : [contextMenu.nodeId].filter(Boolean)
   if (!ids.length) return
   const idSet = new Set(ids)
-  nodes.value = nodes.value.filter((node) => !idSet.has(node.id))
+  // 删除分组时，把其中的卡片释放为独立卡片（保留在画布上，还原为绝对坐标）
+  const deletedGroupPos = {}
+  nodes.value.forEach((n) => {
+    if (idSet.has(n.id) && n.type === 'group') deletedGroupPos[n.id] = n.position
+  })
+  nodes.value = nodes.value
+    .filter((node) => !idSet.has(node.id))
+    .map((node) => {
+      if (node.parentNode && deletedGroupPos[node.parentNode]) {
+        const gp = deletedGroupPos[node.parentNode]
+        const rest = { ...node }
+        delete rest.parentNode
+        return { ...rest, position: { x: gp.x + node.position.x, y: gp.y + node.position.y } }
+      }
+      return node
+    })
   edges.value = edges.value.filter((edge) => !idSet.has(edge.source) && !idSet.has(edge.target))
   closeMenu()
   message.success(ids.length > 1 ? `已删除 ${ids.length} 个` : '已删除')
@@ -1211,6 +1260,75 @@ function editContextNode() {
     Object.entries(query).filter(([, v]) => v != null && v !== ''),
   )
   router.push({ path: target.path, query: cleanQuery })
+}
+
+// ---------- 卡片分组 ----------
+function groupSelected() {
+  closeMenu()
+  const members = selectedNodes.value.filter((n) => n.type !== 'group' && !n.parentNode)
+  if (members.length < 2) return message.warning('请先按住 Shift 或框选至少 2 张卡片')
+  const TITLE_BAR = 34
+  const PAD = 26
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  members.forEach((n) => {
+    const abs = absolutePosition(n)
+    const size = nodeSize(n)
+    minX = Math.min(minX, abs.x)
+    minY = Math.min(minY, abs.y)
+    maxX = Math.max(maxX, abs.x + size.width)
+    maxY = Math.max(maxY, abs.y + size.height)
+  })
+  const groupX = minX - PAD
+  const groupY = minY - PAD - TITLE_BAR
+  const width = Math.round(maxX - minX + PAD * 2)
+  const height = Math.round(maxY - minY + PAD * 2 + TITLE_BAR)
+  const groupId = `group_${Date.now()}`
+  const index = nodes.value.filter((n) => n.type === 'group').length + 1
+  const groupNode = {
+    id: groupId,
+    type: 'group',
+    position: { x: groupX, y: groupY },
+    class: 'group-node-wrap',
+    style: { width: `${width}px`, height: `${height}px` },
+    data: { title: `分组 ${index}` },
+    selected: false,
+  }
+  const memberIds = new Set(members.map((n) => n.id))
+  const updated = nodes.value.map((n) => {
+    if (!memberIds.has(n.id)) return n
+    const abs = absolutePosition(n)
+    return {
+      ...n,
+      parentNode: groupId,
+      position: { x: abs.x - groupX, y: abs.y - groupY },
+      selected: false,
+    }
+  })
+  nodes.value = [groupNode, ...updated]
+  message.success(`已建立分组（${members.length} 张卡片）`)
+}
+
+function ungroupNode(groupId) {
+  const group = nodes.value.find((n) => n.id === groupId)
+  if (!group) return
+  const gp = group.position
+  nodes.value = nodes.value
+    .filter((n) => n.id !== groupId)
+    .map((n) => {
+      if (n.parentNode !== groupId) return n
+      const rest = { ...n }
+      delete rest.parentNode
+      return { ...rest, position: { x: gp.x + n.position.x, y: gp.y + n.position.y } }
+    })
+  message.success('已解散分组')
+}
+
+function ungroupContext() {
+  closeMenu()
+  if (contextNode.value?.type === 'group') ungroupNode(contextNode.value.id)
 }
 
 function resetViewport() {
@@ -1299,7 +1417,7 @@ onBeforeUnmount(() => {
         v-model:edges="edges"
         :pan-on-drag="[1]"
         :selection-key-code="false"
-        :multi-selection-key-code="null"
+        :multi-selection-key-code="'Shift'"
         :select-nodes-on-drag="false"
         selection-mode="partial"
         :zoom-on-double-click="false"
@@ -1499,6 +1617,18 @@ onBeforeUnmount(() => {
           </div>
         </template>
 
+        <template #node-group="{ id, data }">
+          <div class="group-node">
+            <input
+              class="group-title-input nodrag"
+              :value="data.title"
+              placeholder="分组标题"
+              @input="updateNodeTitle(id, $event.target.value)"
+              @mousedown.stop
+            />
+          </div>
+        </template>
+
         <template #node-storyboard-layout="{ id, data, selected }">
           <div class="storyboard-layout-card" :class="{ selected }" :style="{ minHeight: storyboardLayoutHeight(id, data) + 'px' }">
             <Handle
@@ -1615,6 +1745,12 @@ onBeforeUnmount(() => {
           <button v-if="canEditContextNode" @click="editContextNode">
             <Pencil :size="14" /> 编辑{{ contextEditTarget?.label }}
           </button>
+          <button v-if="contextIsGroup" @click="ungroupContext">
+            <RotateCcw :size="14" /> 解散分组
+          </button>
+          <button v-if="!contextIsGroup && selectedCount >= 2" @click="groupSelected">
+            <FolderKanban :size="14" /> 建立分组（{{ selectedCount }}）
+          </button>
           <button class="danger" @click="deleteContextNodes">
             <Trash2 :size="14" /> 删除{{ selectedCount > 1 ? ` ${selectedCount} 个` : '' }}
           </button>
@@ -1629,6 +1765,9 @@ onBeforeUnmount(() => {
           <button @click="addStoryboardLayout"><Clapperboard :size="14" /> 分镜排布</button>
           <button @click="addMasterOutputNode"><Video :size="14" /> 总镜头输出节点</button>
           <div class="context-separator" />
+          <button v-if="selectedCount >= 2" @click="groupSelected">
+            <FolderKanban :size="14" /> 建立分组（{{ selectedCount }}）
+          </button>
           <button v-if="selectedCount > 0" class="danger" @click="deleteContextNodes">
             <Trash2 :size="14" /> 删除{{ selectedCount > 1 ? ` ${selectedCount} 个` : '' }}
           </button>
@@ -1929,7 +2068,7 @@ onBeforeUnmount(() => {
   fill: var(--brand-color);
   stroke: var(--brand-color);
 }
-.project-flow :deep(.vue-flow__node:not(.script-work-node):not(.role-card-node):not(.image-card-node):not(.storyboard-layout-node):not(.shot-node):not(.master-output-node)) {
+.project-flow :deep(.vue-flow__node:not(.script-work-node):not(.role-card-node):not(.image-card-node):not(.storyboard-layout-node):not(.shot-node):not(.master-output-node):not(.group-node-wrap)) {
   min-width: 146px;
   padding: 12px 14px;
   border: 1px solid var(--border-strong);
@@ -1940,7 +2079,7 @@ onBeforeUnmount(() => {
   font-size: 13px;
   font-weight: 650;
 }
-.project-flow :deep(.vue-flow__node:not(.script-work-node):not(.role-card-node):not(.image-card-node):not(.storyboard-layout-node):not(.shot-node):not(.master-output-node)::after) {
+.project-flow :deep(.vue-flow__node:not(.script-work-node):not(.role-card-node):not(.image-card-node):not(.storyboard-layout-node):not(.shot-node):not(.master-output-node):not(.group-node-wrap)::after) {
   content: attr(data-id);
   display: block;
   margin-top: 4px;
@@ -1957,7 +2096,8 @@ onBeforeUnmount(() => {
 .project-flow :deep(.image-card-node),
 .project-flow :deep(.storyboard-layout-node),
 .project-flow :deep(.shot-node),
-.project-flow :deep(.master-output-node) {
+.project-flow :deep(.master-output-node),
+.project-flow :deep(.group-node-wrap) {
   padding: 0;
   border: none;
   background: transparent;
@@ -1980,6 +2120,32 @@ onBeforeUnmount(() => {
 }
 .project-flow :deep(.master-output-node) {
   width: 280px;
+}
+.group-node {
+  width: 100%;
+  height: 100%;
+  border: 1.5px dashed color-mix(in srgb, var(--brand-color) 55%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--brand-color) 7%, transparent);
+}
+.project-flow :deep(.group-node-wrap.selected .group-node) {
+  border-style: solid;
+  border-color: var(--brand-color);
+}
+.group-title-input {
+  width: calc(100% - 20px);
+  margin: 7px 10px;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
+}
+.group-title-input::placeholder {
+  color: var(--text-tertiary);
+  font-weight: 400;
 }
 
 .script-card {
