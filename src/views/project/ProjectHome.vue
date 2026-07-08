@@ -579,8 +579,8 @@ function getNodeFallbackSize(node) {
   if (node.type === 'role-card') return { width: 280, height: 224 }
   if (node.type === 'image-card') return { width: 280, height: 214 }
   if (node.type === 'storyboard-layout') return { width: 320, height: storyboardLayoutHeight(node.id, node.data) }
-  if (node.type === 'shot-node') return { width: 280, height: 240 }
-  if (node.type === 'master-output-node') return { width: 280, height: 140 }
+  if (node.type === 'shot-node') return { width: 280, height: 340 }
+  if (node.type === 'master-output-node') return { width: 340, height: 280 }
   return { width: 170, height: 64 }
 }
 
@@ -805,11 +805,12 @@ function addMasterOutputNode() {
   addNode({
     id: `master_output_${Date.now()}`,
     type: 'master-output-node',
-    position: nodePosition(280),
+    position: nodePosition(340),
     class: 'master-output-node',
     data: {
       title: index === 1 ? '总镜头输出' : `总镜头输出 ${index}`,
       desc: '接收分镜排布的最终总镜头结构。',
+      video: '',
     },
   })
 }
@@ -1056,7 +1057,7 @@ function updateShotPrompt(id, value) {
 }
 
 function generateShotVideo() {
-  message.info('分镜视频生成能力开发中（已预留接口）')
+  message.info('视频生成能力开发中（已预留接口）')
 }
 
 // 一键生成分镜镜头：读取该分镜总览所连剧情 -> 调 AI 拆分 -> 生成分镜卡片并建立关联
@@ -1587,16 +1588,20 @@ onBeforeUnmount(() => {
               <input class="node-title-input nodrag" :value="data.title" @input="updateNodeTitle(id, $event.target.value)" />
               <span v-if="data.duration" class="shot-duration">{{ data.duration }}s</span>
             </div>
-            <div class="shot-node-thumb">
-              <img
-                v-if="data.image && !brokenCovers.has(id)"
-                :src="previewUrl(data.image)"
-                :alt="data.title"
+            <div class="shot-node-media">
+              <video
+                v-if="data.video && !brokenCovers.has(id)"
+                :src="previewUrl(data.video)"
+                class="nodrag"
+                controls
+                preload="metadata"
+                @mousedown.stop
                 @error="markCoverBroken(id)"
               />
-              <div v-else class="shot-thumb-empty">
-                <Clapperboard :size="18" />
-                <span>画面未生成</span>
+              <img v-else-if="data.image" :src="previewUrl(data.image)" :alt="data.title" />
+              <div v-else class="shot-media-empty">
+                <Video :size="24" />
+                <span>视频未生成</span>
               </div>
             </div>
             <div class="shot-prompt-label">分镜提示词</div>
@@ -1621,8 +1626,25 @@ onBeforeUnmount(() => {
               <Video :size="17" />
               <input class="node-title-input nodrag" :value="data.title" @input="updateNodeTitle(id, $event.target.value)" />
             </div>
-            <div class="flow-card-kicker">最终输出</div>
-            <p>{{ data.desc }}</p>
+            <div class="flow-card-kicker">最终输出 · 总视频</div>
+            <div class="master-video">
+              <video
+                v-if="data.video && !brokenCovers.has(id)"
+                :src="previewUrl(data.video)"
+                class="nodrag"
+                controls
+                preload="metadata"
+                @mousedown.stop
+                @error="markCoverBroken(id)"
+              />
+              <div v-else class="master-video-empty">
+                <Video :size="30" />
+                <span>总视频未生成</span>
+              </div>
+            </div>
+            <button class="master-video-btn nodrag" @mousedown.stop @click.stop="generateShotVideo(id, data)">
+              <Video :size="14" /> 生成总视频
+            </button>
           </div>
         </template>
 
@@ -2128,7 +2150,7 @@ onBeforeUnmount(() => {
   width: 280px;
 }
 .project-flow :deep(.master-output-node) {
-  width: 280px;
+  width: 340px;
 }
 .group-node {
   width: 100%;
@@ -2395,7 +2417,7 @@ onBeforeUnmount(() => {
   min-height: 214px;
 }
 .shot-node-card {
-  min-height: 232px;
+  min-height: 300px;
   border-left: 3px solid #a78bfa;
 }
 .shot-duration {
@@ -2406,8 +2428,8 @@ onBeforeUnmount(() => {
   background: rgba(167, 139, 250, 0.2);
   font-size: 11px;
 }
-.shot-node-thumb {
-  height: 92px;
+.shot-node-media {
+  height: 158px;
   margin-top: 10px;
   display: flex;
   align-items: center;
@@ -2417,18 +2439,19 @@ onBeforeUnmount(() => {
   border-radius: 7px;
   background: #000;
 }
-.shot-node-thumb img {
+.shot-node-media img,
+.shot-node-media video {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
-.shot-thumb-empty {
+.shot-media-empty {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
-  color: rgba(255, 255, 255, 0.4);
-  font-size: 11px;
+  gap: 6px;
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 12px;
 }
 .shot-prompt-label {
   margin: 10px 0 4px;
@@ -2474,8 +2497,51 @@ onBeforeUnmount(() => {
   background: rgba(167, 139, 250, 0.32);
 }
 .master-output-card {
-  min-height: 120px;
+  min-height: 260px;
   border-left: 3px solid #22c55e;
+}
+.master-video {
+  height: 176px;
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: #000;
+}
+.master-video video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.master-video-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 12px;
+}
+.master-video-btn {
+  width: 100%;
+  height: 32px;
+  margin-top: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid #22c55e;
+  border-radius: 7px;
+  color: #dcfce7;
+  background: rgba(34, 197, 94, 0.16);
+  font-size: 12px;
+  cursor: pointer;
+}
+.master-video-btn:hover {
+  color: #fff;
+  background: rgba(34, 197, 94, 0.32);
 }
 .flow-card-head {
   display: flex;
