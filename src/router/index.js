@@ -16,7 +16,7 @@ const routes = [
     path: '/project',
     component: () => import('../views/ProjectView.vue'),
     children: [
-      { path: '', redirect: '/project/scripts' },
+      { path: '', redirect: '/project/home' },
       { path: 'home', name: 'project-home', component: () => import('../views/project/ProjectHome.vue') },
       { path: 'scripts', name: 'project-scripts', component: () => import('../views/project/ScriptLibrary.vue') },
       { path: 'roles', name: 'project-roles', component: () => import('../views/project/RoleLibrary.vue') },

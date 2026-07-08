@@ -30,7 +30,7 @@ async function loadRecent() {
 
 function enterProject(project) {
   appStore.setCurrentProject(project)
-  router.push('/project/scripts')
+  router.push('/project/home')
 }
 
 async function openFromRecent(item) {
