@@ -4,9 +4,11 @@ import { computed, watch, onBeforeUnmount } from 'vue'
 import { LoaderCircle, CheckCircle2, AlertCircle, X } from 'lucide-vue-next'
 import { useAiTaskStore } from '../store/aiTasks.js'
 import { useRoleTaskStore } from '../store/roleTasks.js'
+import { useCanvasAiTaskStore } from '../store/canvasAiTasks.js'
 
 const aiTask = useAiTaskStore()
 const roleTask = useRoleTaskStore()
+const canvasTask = useCanvasAiTaskStore()
 
 // ---------- 剧本任务 ----------
 const aiVisible = computed(() => aiTask.status !== 'idle')
@@ -33,8 +35,23 @@ const roleDesc = computed(() => {
   return roleTask.roleName ? `正在强化外观、性格与声线：${roleTask.roleName}` : ''
 })
 
+// ---------- 画布任务（分镜生成 / 剧情卡关联角色） ----------
+const canvasVisible = computed(() => canvasTask.status !== 'idle')
+const canvasKindLabel = computed(() => (canvasTask.kind === 'storyboard' ? '生成分镜' : '关联角色'))
+const canvasTitle = computed(() => {
+  if (canvasTask.status === 'running') return `正在AI${canvasKindLabel.value}…`
+  if (canvasTask.status === 'done') return canvasTask.kind === 'storyboard' ? '分镜已生成' : '角色已识别'
+  return canvasTask.kind === 'storyboard' ? '分镜生成失败' : '角色识别失败'
+})
+const canvasDesc = computed(() => {
+  if (canvasTask.status === 'error') return canvasTask.error
+  if (canvasTask.status === 'done') return '请回到工程页确认后写入画布'
+  return canvasTask.kind === 'storyboard' ? '正在拆解本集分镜镜头…' : '正在识别参与角色并匹配角色库…'
+})
+
 let aiTimer = null
 let roleTimer = null
+let canvasTimer = null
 
 watch(
   () => aiTask.status,
@@ -62,9 +79,22 @@ watch(
   },
 )
 
+watch(
+  () => canvasTask.status,
+  (s) => {
+    if (canvasTimer) {
+      clearTimeout(canvasTimer)
+      canvasTimer = null
+    }
+    // 完成态保持常驻，提醒用户回工程页确认（结果暂存 store，取用/关闭前不清理）；失败态自动隐藏
+    if (s === 'error') canvasTimer = setTimeout(() => canvasTask.dismiss(), 10000)
+  },
+)
+
 onBeforeUnmount(() => {
   if (aiTimer) clearTimeout(aiTimer)
   if (roleTimer) clearTimeout(roleTimer)
+  if (canvasTimer) clearTimeout(canvasTimer)
 })
 
 function closeAi() {
@@ -74,6 +104,10 @@ function closeAi() {
 function closeRole() {
   if (roleTimer) clearTimeout(roleTimer)
   roleTask.dismiss()
+}
+function closeCanvas() {
+  if (canvasTimer) clearTimeout(canvasTimer)
+  canvasTask.dismiss()
 }
 </script>
 
@@ -116,6 +150,23 @@ function closeRole() {
           <div class="ai-desc">{{ roleDesc }}</div>
         </div>
         <button v-if="roleTask.status !== 'running'" class="ai-close" @click="closeRole">
+          <X :size="15" />
+        </button>
+      </div>
+    </transition>
+
+    <transition name="fade-up">
+      <div v-if="canvasVisible" class="ai-indicator" :class="canvasTask.status">
+        <div class="ai-ico">
+          <LoaderCircle v-if="canvasTask.status === 'running'" :size="20" class="spin" />
+          <CheckCircle2 v-else-if="canvasTask.status === 'done'" :size="20" />
+          <AlertCircle v-else :size="20" />
+        </div>
+        <div class="ai-body">
+          <div class="ai-title">{{ canvasTitle }}</div>
+          <div class="ai-desc">{{ canvasDesc }}</div>
+        </div>
+        <button v-if="canvasTask.status !== 'running'" class="ai-close" @click="closeCanvas">
           <X :size="15" />
         </button>
       </div>

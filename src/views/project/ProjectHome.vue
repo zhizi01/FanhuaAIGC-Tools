@@ -31,14 +31,13 @@ import { Modal, message } from 'ant-design-vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '../../store/appState.js'
 import { useFlowCanvasStore } from '../../store/flowCanvas.js'
-import { useUsageStore } from '../../store/usage.js'
+import { useCanvasAiTaskStore } from '../../store/canvasAiTasks.js'
 import { api } from '../../services/bridge.js'
-import { generateStoryboardShots, identifyEpisodeRoles } from '../../services/ai.js'
 import { assetUrl } from '../../utils/asset.js'
 
 const appStore = useAppStore()
 const flowStore = useFlowCanvasStore()
-const usageStore = useUsageStore()
+const canvasAi = useCanvasAiTaskStore()
 const router = useRouter()
 const project = computed(() => appStore.currentProject || {})
 
@@ -54,8 +53,6 @@ const normalizedSnapshot = ref('')
 const draggingShot = ref(null)
 const brokenCovers = reactive(new Set())
 const scriptDrafts = reactive({})
-const storyboardLoading = reactive({})
-const scriptRoleLoading = reactive({})
 const roleOptions = ref([])
 const imageOptions = ref([])
 const mentionOptions = computed(() => [...roleOptions.value, ...imageOptions.value])
@@ -399,6 +396,8 @@ async function initializeCanvas() {
   await nextTick()
   await refreshRoleCards()
   await refreshScriptNodes()
+  // 后台画布 AI 任务可能在离开工程页期间完成，回到工程页后取用结果并弹出确认
+  maybeShowCanvasAiResult()
 }
 
 function syncCanvasDraft() {
@@ -610,6 +609,22 @@ function nodePosition(width = 280, x = contextMenu.flowX, y = contextMenu.flowY)
     x: x - width / 2,
     y: y - 24,
   }
+}
+
+// 批量生成卡片的网格排布：每行 5 个、超出自动换行，列/行间距统一
+const GRID_COLS = 5
+function gridPosition(baseX, baseY, index, stepX, stepY) {
+  return {
+    x: baseX + (index % GRID_COLS) * stepX,
+    y: baseY + Math.floor(index / GRID_COLS) * stepY,
+  }
+}
+
+// 让整块网格落在锚点卡片左侧，网格右边缘与锚点保持固定间距
+function gridBaseX(anchorX, count, cardWidth, stepX, gap = 96) {
+  const cols = Math.min(GRID_COLS, Math.max(1, count))
+  const gridWidth = (cols - 1) * stepX + cardWidth
+  return anchorX - gridWidth - gap
 }
 
 function addNode(node) {
@@ -1049,19 +1064,6 @@ function linkedRoleIdsForScript(scriptNodeId) {
   )
 }
 
-function findLibraryRole(libraryRoles, name) {
-  const target = String(name || '').trim().toLowerCase()
-  if (!target) return null
-  return (
-    libraryRoles.find((r) => String(r.name || '').trim().toLowerCase() === target) ||
-    libraryRoles.find((r) => {
-      const n = String(r.name || '').trim().toLowerCase()
-      return n && (target.includes(n) || n.includes(target))
-    }) ||
-    null
-  )
-}
-
 function resetScriptRolePreview() {
   Object.assign(scriptRolePreview, {
     visible: false,
@@ -1080,10 +1082,11 @@ const scriptRoleSelectedCount = computed(
   () => scriptRolePreview.items.filter((item) => item.checked && item.roleId && !item.alreadyLinked).length,
 )
 
-// 一键 AI 关联角色：识别本集参与角色 -> 匹配角色库 -> 弹窗确认后挂到画布
+// 一键 AI 关联角色：交给后台任务识别参与角色并匹配角色库，切换界面不中断；完成后回工程页确认
 async function associateScriptRoles(scriptNodeId) {
   const projectPath = project.value?.path
-  if (!projectPath || scriptRoleLoading[scriptNodeId] || scriptRolePreview.visible) return
+  if (!projectPath || scriptRolePreview.visible) return
+  if (canvasAi.active) return message.warning('已有画布 AI 任务进行中，请稍候')
   const scriptNode = nodes.value.find((n) => n.id === scriptNodeId)
   if (!scriptNode) return
   const content = scriptDraftContent(scriptNodeId, scriptNode.data)
@@ -1094,53 +1097,32 @@ async function associateScriptRoles(scriptNodeId) {
     return message.warning('请先在设置页添加模型')
   }
 
-  scriptRoleLoading[scriptNodeId] = true
-  try {
-    const [{ roles, usage }, libraryRoles] = await Promise.all([
-      identifyEpisodeRoles({
-        episodeTitle: scriptNode.data?.episodeTitle || scriptNode.data?.title || '',
-        episodeContent: String(content).slice(0, 16000),
-        modelId: appStore.currentModelId,
-      }),
-      api.roles.list(projectPath),
-    ])
-    usageStore.add(projectPath, usage)
-    if (!roles.length) return message.warning('AI 未识别到参与角色，请重试')
+  const res = canvasAi.startScriptRole({
+    projectPath,
+    scriptNodeId,
+    episodeTitle: scriptNode.data?.episodeTitle || scriptNode.data?.title || '',
+    episodeContent: String(content).slice(0, 16000),
+  })
+  if (!res.ok) message.warning(res.reason)
+}
 
-    const linkedIds = linkedRoleIdsForScript(scriptNodeId)
-    const items = roles.map((role, i) => {
-      const matched = findLibraryRole(libraryRoles, role.name)
-      const alreadyLinked = matched ? linkedIds.has(matched.id) : false
-      return {
-        key: `script_role_${Date.now()}_${i}`,
-        name: role.name,
-        roleType: role.roleType || matched?.roleType || '',
-        note: role.note || '',
-        roleId: matched?.id || '',
-        cover: matched ? roleCover(matched) : '',
-        identity: matched?.identity || '',
-        personality: matched?.personality || '',
-        appearance: matched?.appearance || '',
-        gender: matched?.gender || '',
-        age: matched?.age || '',
-        voice: matched?.voice || '',
-        matched: Boolean(matched),
-        alreadyLinked,
-        checked: Boolean(matched) && !alreadyLinked,
-      }
-    })
-
-    Object.assign(scriptRolePreview, {
-      visible: true,
-      applying: false,
-      scriptNodeId,
-      items,
-    })
-  } catch (err) {
-    message.error('识别角色失败：' + err.message)
-  } finally {
-    scriptRoleLoading[scriptNodeId] = false
-  }
+// 后台识别完成后：结合当前画布连线状态，弹出确认关联角色的对话框
+function showScriptRoleResult(payload) {
+  const { scriptNodeId, items } = payload
+  const scriptNode = nodes.value.find((n) => n.id === scriptNodeId)
+  if (!scriptNode) return message.warning('对应的剧情卡已不在画布上，请重新关联')
+  if (!items.length) return message.warning('AI 未识别到参与角色，请重试')
+  const linkedIds = linkedRoleIdsForScript(scriptNodeId)
+  const withState = items.map((item) => {
+    const alreadyLinked = item.roleId ? linkedIds.has(item.roleId) : false
+    return { ...item, alreadyLinked, checked: Boolean(item.matched) && !alreadyLinked }
+  })
+  Object.assign(scriptRolePreview, {
+    visible: true,
+    applying: false,
+    scriptNodeId,
+    items: withState,
+  })
 }
 
 function applyScriptRolePreview() {
@@ -1157,8 +1139,6 @@ function applyScriptRolePreview() {
   try {
     const scriptNode = nodes.value.find((n) => n.id === scriptNodeId)
     if (!scriptNode) throw new Error('剧情节点不存在')
-    const baseX = (scriptNode.position?.x || 0) - 320
-    const baseY = scriptNode.position?.y || 0
     const stamp = Date.now()
     const newNodes = []
     const newEdges = []
@@ -1171,6 +1151,14 @@ function applyScriptRolePreview() {
         .map((n) => [n.data.roleId, n]),
     )
 
+    // 新建角色卡按每行 5 个的网格排布在剧情卡左侧
+    const willPlace = chosen.filter(
+      (item) => !linkedIds.has(item.roleId) && !existingByRoleId.has(item.roleId),
+    ).length
+    const baseX = gridBaseX(scriptNode.position?.x || 0, willPlace, 280, 330)
+    const baseY = scriptNode.position?.y || 0
+    let placed = 0
+
     chosen.forEach((item, i) => {
       if (linkedIds.has(item.roleId)) return
       let roleNode = existingByRoleId.get(item.roleId)
@@ -1179,7 +1167,7 @@ function applyScriptRolePreview() {
         roleNode = {
           id: nodeId,
           type: 'role-card',
-          position: { x: baseX, y: baseY + i * 240 },
+          position: gridPosition(baseX, baseY, placed++, 330, 280),
           class: 'role-card-node',
           data: {
             title: item.name || '未命名角色',
@@ -1366,10 +1354,11 @@ function removePreviewShot(index) {
   storyboardPreview.shots = storyboardPreview.shots.filter((_, i) => i !== index)
 }
 
-// 一键生成分镜：先检查关联记录 -> AI 生成 -> 弹窗确认后再写入画布
+// 一键生成分镜：先检查关联记录，再交给后台任务生成（切换界面不中断），完成后回工程页确认写入画布
 async function generateStoryboard(layoutId) {
   const projectPath = project.value?.path
-  if (!projectPath || storyboardLoading[layoutId] || storyboardPreview.visible) return
+  if (!projectPath || storyboardPreview.visible) return
+  if (canvasAi.active) return message.warning('已有画布 AI 任务进行中，请稍候')
   const scriptEdge = edges.value.find(
     (e) => e.target === layoutId && e.targetHandle === 'layout-script-in',
   )
@@ -1391,34 +1380,40 @@ async function generateStoryboard(layoutId) {
     clearOld = true
   }
 
-  storyboardLoading[layoutId] = true
-  try {
-    const { shots, usage } = await generateStoryboardShots({
-      episodeTitle: scriptNode.data.episodeTitle || scriptNode.data.title || '',
-      episodeContent: content.slice(0, 16000),
-      modelId: appStore.currentModelId,
-    })
-    usageStore.add(projectPath, usage)
-    if (!shots.length) return message.warning('AI 未生成分镜，请重试')
+  const res = canvasAi.startStoryboard({
+    projectPath,
+    layoutId,
+    clearOld,
+    episodeTitle: scriptNode.data.episodeTitle || scriptNode.data.title || '',
+    episodeContent: content.slice(0, 16000),
+  })
+  if (!res.ok) message.warning(res.reason)
+}
 
-    Object.assign(storyboardPreview, {
-      visible: true,
-      applying: false,
-      layoutId,
-      clearOld,
-      shots: shots.map((shot, i) => ({
-        key: `preview_${Date.now()}_${i}`,
-        title: shot.title || `分镜 ${i + 1}`,
-        duration: Number(shot.duration) || 0,
-        method: shot.method || '',
-        prompt: shot.prompt || shot.method || '',
-        description: shot.description || '',
-      })),
-    })
-  } catch (err) {
-    message.error('生成分镜失败：' + err.message)
-  } finally {
-    storyboardLoading[layoutId] = false
+// 后台生成完成后：弹出分镜结果确认对话框
+function showStoryboardResult(payload) {
+  const { layoutId, clearOld, shots } = payload
+  const layout = nodes.value.find((n) => n.id === layoutId)
+  if (!layout) return message.warning('对应的分镜排布卡片已不在画布上，请重新生成')
+  if (!shots.length) return message.warning('AI 未生成分镜，请重试')
+  Object.assign(storyboardPreview, {
+    visible: true,
+    applying: false,
+    layoutId,
+    clearOld,
+    shots,
+  })
+}
+
+// 后台画布 AI 任务完成后，若结果属于当前工程且暂无弹窗，则取用并弹出确认
+function maybeShowCanvasAiResult() {
+  if (canvasAi.status !== 'done' || canvasAi.consumed) return
+  if (canvasAi.projectPath !== project.value?.path) return
+  if (storyboardPreview.visible || scriptRolePreview.visible) return
+  if (canvasAi.kind === 'storyboard') {
+    showStoryboardResult(canvasAi.consumeStoryboard())
+  } else if (canvasAi.kind === 'scriptRole') {
+    showScriptRoleResult(canvasAi.consumeScriptRole())
   }
 }
 
@@ -1436,7 +1431,8 @@ function applyStoryboardPreview() {
   storyboardPreview.applying = true
   try {
     const layoutBefore = nodes.value.find((n) => n.id === layoutId)
-    const baseX = (layoutBefore?.position?.x || 0) - 320
+    // 生成的分镜卡按每行 5 个的网格排布在分镜排布卡左侧
+    const baseX = gridBaseX(layoutBefore?.position?.x || 0, shots.length, 280, 330)
     const baseY = layoutBefore?.position?.y || 0
     const keepOrder = storyboardPreview.clearOld
       ? []
@@ -1463,7 +1459,7 @@ function applyStoryboardPreview() {
       newNodes.push({
         id: nodeId,
         type: 'shot-node',
-        position: { x: baseX, y: baseY + i * 200 },
+        position: gridPosition(baseX, baseY, i, 330, 400),
         class: 'shot-node',
         data: {
           title: shot.title || `分镜 ${startNo + i}`,
@@ -1767,6 +1763,12 @@ watch(
   { deep: true },
 )
 
+// 后台画布 AI 任务完成/失败会自增 version，在工程页时即时弹出结果确认
+watch(
+  () => canvasAi.version,
+  () => maybeShowCanvasAiResult(),
+)
+
 let resizeObserver = null
 onMounted(() => {
   updateCanvasSize()
@@ -1886,13 +1888,13 @@ onBeforeUnmount(() => {
 
             <button
               class="script-role-gen-btn nodrag"
-              :disabled="scriptRoleLoading[id]"
+              :disabled="canvasAi.isBusy('scriptRole', id)"
               @mousedown.stop
               @click.stop="associateScriptRoles(id)"
             >
-              <LoaderCircle v-if="scriptRoleLoading[id]" :size="13" class="sb-spin" />
+              <LoaderCircle v-if="canvasAi.isBusy('scriptRole', id)" :size="13" class="sb-spin" />
               <UserRound v-else :size="13" />
-              {{ scriptRoleLoading[id] ? 'AI 识别角色中…' : '一键 AI 关联角色' }}
+              {{ canvasAi.isBusy('scriptRole', id) ? 'AI 识别角色中…' : '一键 AI 关联角色' }}
             </button>
 
             <div class="script-port-list script-port-left">
@@ -2103,13 +2105,13 @@ onBeforeUnmount(() => {
             </div>
             <button
               class="storyboard-gen-btn nodrag"
-              :disabled="storyboardLoading[id]"
+              :disabled="canvasAi.isBusy('storyboard', id)"
               @mousedown.stop
               @click.stop="generateStoryboard(id)"
             >
-              <LoaderCircle v-if="storyboardLoading[id]" :size="14" class="sb-spin" />
+              <LoaderCircle v-if="canvasAi.isBusy('storyboard', id)" :size="14" class="sb-spin" />
               <Sparkles v-else :size="14" />
-              {{ storyboardLoading[id] ? 'AI 生成分镜中…' : '一键生成分镜镜头' }}
+              {{ canvasAi.isBusy('storyboard', id) ? 'AI 生成分镜中…' : '一键生成分镜镜头' }}
             </button>
             <div class="master-output-row">总镜头输出</div>
             <Handle id="master-output" type="source" :position="Position.Right" class="card-handle master-out" />
