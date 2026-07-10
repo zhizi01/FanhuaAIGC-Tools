@@ -6,6 +6,7 @@ import { generateStoryboardShots, identifyEpisodeRoles } from '../services/ai.js
 import { useAppStore } from './appState.js'
 import { useUsageStore } from './usage.js'
 import { useFlowCanvasStore } from './flowCanvas.js'
+import { useApprovalStore } from './approvals.js'
 
 // 归一化角色名，抹平括注/标点/空白差异
 function normalizeName(name) {
@@ -72,12 +73,12 @@ export const useCanvasTaskStore = defineStore('canvasTask', {
     },
 
     // ---------- 分镜生成 ----------
-    startStoryboard({ projectPath, layoutId, episodeTitle, episodeContent, clearOld }) {
+    startStoryboard({ projectPath, projectName, label, layoutId, episodeTitle, episodeContent, clearOld }) {
       if (this.tasks[layoutId]?.status === 'running') return
       this._set(layoutId, { kind: 'storyboard', status: 'running', error: '', projectPath })
-      this._runStoryboard({ projectPath, layoutId, episodeTitle, episodeContent, clearOld })
+      this._runStoryboard({ projectPath, projectName, label, layoutId, episodeTitle, episodeContent, clearOld })
     },
-    async _runStoryboard({ projectPath, layoutId, episodeTitle, episodeContent, clearOld }) {
+    async _runStoryboard({ projectPath, projectName, label, layoutId, episodeTitle, episodeContent, clearOld }) {
       try {
         const { shots, usage } = await generateStoryboardShots({
           episodeTitle,
@@ -86,8 +87,24 @@ export const useCanvasTaskStore = defineStore('canvasTask', {
         })
         await useUsageStore().add(projectPath, usage)
         if (!shots.length) throw new Error('AI 未生成分镜，请重试')
-        const ok = useFlowCanvasStore().applyStoryboardResult({ projectPath, layoutId, shots, clearOld })
-        if (!ok) throw new Error('分镜排布卡片已不在画布上')
+        // 生成成功后进入审批队列，通过后再写入画布
+        useApprovalStore().enqueue({
+          kind: 'storyboard',
+          nodeId: layoutId,
+          projectPath,
+          projectName,
+          label,
+          layoutId,
+          clearOld,
+          shots: shots.map((shot, i) => ({
+            key: `shot_${Date.now()}_${i}`,
+            title: shot.title || `分镜 ${i + 1}`,
+            duration: Number(shot.duration) || 0,
+            method: shot.method || '',
+            prompt: shot.prompt || shot.method || '',
+            description: shot.description || '',
+          })),
+        })
         this._clear(layoutId)
       } catch (err) {
         this._set(layoutId, { status: 'error', error: err?.message || String(err) })
@@ -95,12 +112,12 @@ export const useCanvasTaskStore = defineStore('canvasTask', {
     },
 
     // ---------- 剧情卡关联角色 ----------
-    startScriptRole({ projectPath, scriptNodeId, episodeTitle, episodeContent }) {
+    startScriptRole({ projectPath, projectName, label, scriptNodeId, episodeTitle, episodeContent }) {
       if (this.tasks[scriptNodeId]?.status === 'running') return
       this._set(scriptNodeId, { kind: 'scriptRole', status: 'running', error: '', projectPath })
-      this._runScriptRole({ projectPath, scriptNodeId, episodeTitle, episodeContent })
+      this._runScriptRole({ projectPath, projectName, label, scriptNodeId, episodeTitle, episodeContent })
     },
-    async _runScriptRole({ projectPath, scriptNodeId, episodeTitle, episodeContent }) {
+    async _runScriptRole({ projectPath, projectName, label, scriptNodeId, episodeTitle, episodeContent }) {
       try {
         const [{ roles, usage }, libraryRoles] = await Promise.all([
           identifyEpisodeRoles({ episodeTitle, episodeContent, modelId: useAppStore().currentModelId }),
@@ -108,22 +125,27 @@ export const useCanvasTaskStore = defineStore('canvasTask', {
         ])
         await useUsageStore().add(projectPath, usage)
         if (!roles.length) throw new Error('AI 未识别到参与角色，请重试')
+        // 识别 + 匹配（含未匹配项），交给审批队列由用户勾选确认
         const items = []
         for (let i = 0; i < roles.length; i++) {
           const role = roles[i]
           const summary = findLibraryRole(libraryRoles, role.name)
-          if (!summary) continue // 只自动关联能匹配到角色库的角色
           let full = null
-          try {
-            full = await api.roles.read({ projectPath, roleId: summary.id })
-          } catch {
-            full = null
+          if (summary) {
+            try {
+              full = await api.roles.read({ projectPath, roleId: summary.id })
+            } catch {
+              full = null
+            }
           }
-          const src = full || summary
+          const src = full || summary || {}
           items.push({
+            key: `role_${Date.now()}_${i}`,
             name: role.name,
             roleType: role.roleType || src.roleType || '',
-            roleId: summary.id,
+            note: role.note || '',
+            roleId: summary?.id || '',
+            matched: Boolean(summary),
             cover: roleCover(src),
             identity: src.identity || '',
             personality: src.personality || '',
@@ -133,9 +155,15 @@ export const useCanvasTaskStore = defineStore('canvasTask', {
             voice: src.voice || '',
           })
         }
-        if (!items.length) throw new Error('未匹配到角色库中的角色，请先在角色库创建对应角色')
-        const ok = useFlowCanvasStore().applyScriptRoleResult({ projectPath, scriptNodeId, items })
-        if (!ok) throw new Error('所选角色均已关联，或剧情卡已不在画布上')
+        useApprovalStore().enqueue({
+          kind: 'scriptRole',
+          nodeId: scriptNodeId,
+          projectPath,
+          projectName,
+          label,
+          scriptNodeId,
+          items,
+        })
         this._clear(scriptNodeId)
       } catch (err) {
         this._set(scriptNodeId, { status: 'error', error: err?.message || String(err) })

@@ -11,6 +11,7 @@ import {
   AlertCircle,
   BookOpen,
   Clapperboard,
+  ClipboardCheck,
   FileText,
   FolderKanban,
   GitBranchPlus,
@@ -35,6 +36,7 @@ import { useRouter } from 'vue-router'
 import { useAppStore } from '../../store/appState.js'
 import { useFlowCanvasStore } from '../../store/flowCanvas.js'
 import { useCanvasTaskStore } from '../../store/canvasTasks.js'
+import { useApprovalStore } from '../../store/approvals.js'
 import { api } from '../../services/bridge.js'
 import { resolveModel } from '../../services/ai.js'
 import { assetFileUrl, localFileUrl } from '../../utils/asset.js'
@@ -43,6 +45,7 @@ import { markerEnd, makeEdge } from '../../utils/flow.js'
 const appStore = useAppStore()
 const flowStore = useFlowCanvasStore()
 const canvasTasks = useCanvasTaskStore()
+const approvals = useApprovalStore()
 const router = useRouter()
 const project = computed(() => appStore.currentProject || {})
 
@@ -1160,11 +1163,12 @@ async function saveScriptNode(id, data) {
   }
 }
 
-// 一键 AI 关联角色：该剧情卡进入后台任务（可并发），识别并匹配角色库后直接写入画布
+// 一键 AI 关联角色：该剧情卡进入后台任务（可并发），完成后进入审批队列
 function associateScriptRoles(scriptNodeId) {
   const projectPath = project.value?.path
   if (!projectPath) return
   if (canvasTasks.isRunning(scriptNodeId)) return
+  if (approvals.isPending(scriptNodeId)) return message.warning('该剧情已有待审批的关联结果，请先处理')
   const scriptNode = nodes.value.find((n) => n.id === scriptNodeId)
   if (!scriptNode) return
   const content = scriptDraftContent(scriptNodeId, scriptNode.data)
@@ -1174,10 +1178,13 @@ function associateScriptRoles(scriptNodeId) {
   if (!(appStore.settings.models || []).length) {
     return message.warning('请先在设置页添加模型')
   }
+  const episodeTitle = scriptNode.data?.episodeTitle || scriptNode.data?.title || ''
   canvasTasks.startScriptRole({
     projectPath,
+    projectName: project.value?.name || '',
+    label: episodeTitle ? `关联角色 · ${episodeTitle}` : '关联角色',
     scriptNodeId,
-    episodeTitle: scriptNode.data?.episodeTitle || scriptNode.data?.title || '',
+    episodeTitle,
     episodeContent: String(content).slice(0, 16000),
   })
 }
@@ -1272,11 +1279,12 @@ function confirmReplaceAssociatedShots(count) {
   })
 }
 
-// 一键生成分镜：该分镜排布卡进入后台任务（可并发），成功后直接写入画布
+// 一键生成分镜：该分镜排布卡进入后台任务（可并发），完成后进入审批队列
 async function generateStoryboard(layoutId) {
   const projectPath = project.value?.path
   if (!projectPath) return
   if (canvasTasks.isRunning(layoutId)) return
+  if (approvals.isPending(layoutId)) return message.warning('该分镜排布已有待审批的结果，请先处理')
   const scriptEdge = edges.value.find(
     (e) => e.target === layoutId && e.targetHandle === 'layout-script-in',
   )
@@ -1298,11 +1306,14 @@ async function generateStoryboard(layoutId) {
     clearOld = true
   }
 
+  const episodeTitle = scriptNode.data.episodeTitle || scriptNode.data.title || ''
   canvasTasks.startStoryboard({
     projectPath,
+    projectName: project.value?.name || '',
+    label: episodeTitle ? `生成分镜 · ${episodeTitle}` : '生成分镜',
     layoutId,
     clearOld,
-    episodeTitle: scriptNode.data.episodeTitle || scriptNode.data.title || '',
+    episodeTitle,
     episodeContent: content.slice(0, 16000),
   })
 }
@@ -1688,13 +1699,14 @@ onBeforeUnmount(() => {
 
             <button
               class="script-role-gen-btn nodrag"
-              :disabled="canvasTasks.isRunning(id)"
+              :disabled="canvasTasks.isRunning(id) || approvals.isPending(id)"
               @mousedown.stop
               @click.stop="associateScriptRoles(id)"
             >
               <LoaderCircle v-if="canvasTasks.isRunning(id)" :size="13" class="sb-spin" />
+              <ClipboardCheck v-else-if="approvals.isPending(id)" :size="13" />
               <UserRound v-else :size="13" />
-              {{ canvasTasks.isRunning(id) ? 'AI 识别角色中…' : '一键 AI 关联角色' }}
+              {{ canvasTasks.isRunning(id) ? 'AI 识别角色中…' : approvals.isPending(id) ? '待审批…' : '一键 AI 关联角色' }}
             </button>
             <div v-if="canvasTasks.errorOf(id)" class="card-task-error nodrag" @mousedown.stop>
               <AlertCircle :size="12" />
@@ -1919,13 +1931,14 @@ onBeforeUnmount(() => {
             </div>
             <button
               class="storyboard-gen-btn nodrag"
-              :disabled="canvasTasks.isRunning(id)"
+              :disabled="canvasTasks.isRunning(id) || approvals.isPending(id)"
               @mousedown.stop
               @click.stop="generateStoryboard(id)"
             >
               <LoaderCircle v-if="canvasTasks.isRunning(id)" :size="14" class="sb-spin" />
+              <ClipboardCheck v-else-if="approvals.isPending(id)" :size="14" />
               <Sparkles v-else :size="14" />
-              {{ canvasTasks.isRunning(id) ? 'AI 生成分镜中…' : '一键生成分镜镜头' }}
+              {{ canvasTasks.isRunning(id) ? 'AI 生成分镜中…' : approvals.isPending(id) ? '待审批…' : '一键生成分镜镜头' }}
             </button>
             <div v-if="canvasTasks.errorOf(id)" class="card-task-error nodrag" @mousedown.stop>
               <AlertCircle :size="12" />

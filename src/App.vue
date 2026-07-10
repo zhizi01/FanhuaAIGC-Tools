@@ -1,14 +1,23 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { message, Modal, theme } from 'ant-design-vue'
 import zhCN from 'ant-design-vue/es/locale/zh_CN'
 import { useAppStore, computeIsDark } from './store/appState.js'
 import { useFlowCanvasStore } from './store/flowCanvas.js'
+import { useApprovalStore } from './store/approvals.js'
 import AiTaskIndicator from './components/AiTaskIndicator.vue'
+import ApprovalCenter from './components/ApprovalCenter.vue'
 
 const appStore = useAppStore()
 const flowCanvas = useFlowCanvasStore()
+const approvals = useApprovalStore()
 const closePromptOpen = ref(false)
+
+// 切换/退出工程时，仅保留当前工程的待审批，避免弹出别的工程的审批
+watch(
+  () => appStore.currentProject?.path,
+  (path) => approvals.keepProject(path || '__none__'),
+)
 
 const themeConfig = computed(() => {
   const appearance = appStore.settings.appearance
@@ -69,6 +78,7 @@ onBeforeUnmount(() => {
     <a-app class="app-root">
       <router-view />
       <AiTaskIndicator />
+      <ApprovalCenter />
     </a-app>
   </a-config-provider>
 </template>
