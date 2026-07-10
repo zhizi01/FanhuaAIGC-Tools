@@ -24,7 +24,7 @@ import {
 import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '../../store/appState.js'
 import { api } from '../../services/bridge.js'
-import { assetUrl, formatSize } from '../../utils/asset.js'
+import { assetFileUrl, formatSize } from '../../utils/asset.js'
 
 const appStore = useAppStore()
 const route = useRoute()
@@ -200,7 +200,7 @@ function typeIcon(type) {
   return Package
 }
 function thumbFor(a) {
-  if (a.type === 'image') return assetUrl(project.value?.path, a.thumbnail || a.file)
+  if (a.type === 'image') return assetFileUrl(project.value?.path, a.thumbnail || a.file)
   return ''
 }
 function sourceLabel(source) {
@@ -208,7 +208,7 @@ function sourceLabel(source) {
   if (source === 'import') return '手动导入'
   return source || '未知'
 }
-const previewUrl = computed(() => (detail.value ? assetUrl(project.value?.path, detail.value.file) : ''))
+const previewUrl = computed(() => (detail.value ? assetFileUrl(project.value?.path, detail.value.file) : ''))
 
 async function loadAssets() {
   if (!project.value?.path) return

@@ -36,6 +36,23 @@ function detectType(ext) {
   return 'other'
 }
 
+// 解析 OpenAI 兼容图片接口返回：兼容 b64_json 与 url 两种形式
+async function parseImageResponse(res) {
+  const text = await res.text()
+  let json
+  try {
+    json = JSON.parse(text)
+  } catch {
+    throw new Error(`图片服务返回异常（${res.status}）：${text.slice(0, 160)}`)
+  }
+  if (!res.ok) {
+    const msg = json?.error?.message || json?.message || res.statusText || '未知错误'
+    throw new Error(`图片服务错误（${res.status}）：${msg}`)
+  }
+  const item = (json?.data && json.data[0]) || {}
+  return { b64: item.b64_json || '', url: item.url || '' }
+}
+
 function assetsDir(projectPath) {
   const dir = path.join(projectPath, 'assets')
   fs.mkdirSync(path.join(dir, 'files'), { recursive: true })
@@ -228,6 +245,106 @@ export function registerAssetsIpc() {
     })
     writeIndex(projectPath, { items, folders })
     return { folders, items }
+  })
+
+  // AI 生成图片：OpenAI 兼容接口（无参考图走 /images/generations，有参考图走 /images/edits），
+  // 出图后存入资产库并返回资产条目；主进程执行以便读取本地参考图字节与落盘。
+  ipcMain.handle('assets:generateImage', async (_e, payload) => {
+    const { projectPath, model, prompt, references, folder, size } = payload || {}
+    if (!projectPath) throw new Error('缺少工程路径')
+    if (!model?.baseUrl || !model?.apiKey || !model?.modelCode) {
+      throw new Error('模型配置不完整，请在设置中检查服务地址、APIKEY 与模型代码')
+    }
+    const desc = String(prompt || '').trim()
+    if (!desc) throw new Error('请填写生成描述')
+
+    const base = String(model.baseUrl).replace(/\/+$/, '')
+    const refs = (Array.isArray(references) ? references : [])
+      .map((r) => {
+        if (r?.type !== 'asset') return r?.value || ''
+        // 受管资产文件位于工程 assets/ 目录下（索引记为 files|thumbs/xxx）
+        const rel = /^(files|thumbs)\//.test(r.value || '') ? path.join('assets', r.value) : r.value || ''
+        return rel ? path.join(projectPath, rel) : ''
+      })
+      .filter((abs) => abs && fs.existsSync(abs))
+    const imgSize = size || '1024x1024'
+
+    let result
+    if (refs.length) {
+      const form = new FormData()
+      form.append('model', model.modelCode)
+      form.append('prompt', desc)
+      form.append('size', imgSize)
+      form.append('n', '1')
+      const field = refs.length > 1 ? 'image[]' : 'image'
+      for (const abs of refs) {
+        const buf = fs.readFileSync(abs)
+        const ext = path.extname(abs).slice(1).toLowerCase() || 'png'
+        form.append(field, new Blob([buf], { type: MIME[ext] || 'image/png' }), path.basename(abs))
+      }
+      const res = await fetch(`${base}/images/edits`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${model.apiKey}` },
+        body: form,
+      })
+      result = await parseImageResponse(res)
+    } else {
+      const res = await fetch(`${base}/images/generations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${model.apiKey}` },
+        body: JSON.stringify({ model: model.modelCode, prompt: desc, n: 1, size: imgSize }),
+      })
+      result = await parseImageResponse(res)
+    }
+
+    let bytes
+    if (result.b64) {
+      bytes = Buffer.from(result.b64, 'base64')
+    } else if (result.url) {
+      const r = await fetch(result.url)
+      if (!r.ok) throw new Error(`下载生成图片失败（${r.status}）`)
+      bytes = Buffer.from(await r.arrayBuffer())
+    } else {
+      throw new Error('模型未返回图片数据')
+    }
+
+    const dir = assetsDir(projectPath)
+    const now = new Date().toISOString()
+    const id = genId('asset')
+    const fileRel = `files/${id}.png`
+    fs.writeFileSync(path.join(dir, fileRel), bytes)
+    let thumbRel = `thumbs/${id}.png`
+    try {
+      fs.writeFileSync(path.join(dir, thumbRel), bytes)
+    } catch {
+      thumbRel = ''
+    }
+    const name = desc.slice(0, 16) || 'AI生成图片'
+    const meta = {
+      id,
+      name,
+      type: 'image',
+      folder: folder ? storeFolder(folder) : 'AI生成',
+      source: 'generated',
+      sourceRef: '',
+      managedFile: true,
+      originalName: `${name}.png`,
+      file: fileRel,
+      thumbnail: thumbRel,
+      mimeType: 'image/png',
+      size: bytes.length,
+      description: `AI 生成：${desc.slice(0, 200)}`,
+      prompt: desc,
+      linkedRoleIds: [],
+      linkedEpisodes: [],
+      usage: 'AI生成图片',
+      createdAt: now,
+      updatedAt: now,
+    }
+    writeMeta(projectPath, meta)
+    const index = readIndex(projectPath)
+    writeIndex(projectPath, { items: [toIndexItem(meta), ...index.items], folders: index.folders })
+    return toIndexItem(meta)
   })
 
   // 移动资产到指定文件夹（供拖拽/详情面板使用）

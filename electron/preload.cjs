@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('api', {
     save: (payload) => ipcRenderer.invoke('assets:save', payload),
     remove: (payload) => ipcRenderer.invoke('assets:remove', payload),
     import: (payload) => ipcRenderer.invoke('assets:import', payload),
+    generateImage: (payload) => ipcRenderer.invoke('assets:generateImage', payload),
     syncGenerated: (projectPath) => ipcRenderer.invoke('assets:syncGenerated', projectPath),
     folders: (projectPath) => ipcRenderer.invoke('assets:folders', projectPath),
     createFolder: (payload) => ipcRenderer.invoke('assets:createFolder', payload),

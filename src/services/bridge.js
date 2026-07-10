@@ -69,6 +69,7 @@ function wrapElectronApi(raw) {
       save: (payload) => raw.assets.save(toPlain(payload)),
       remove: (payload) => raw.assets.remove(toPlain(payload)),
       import: (payload) => raw.assets.import(toPlain(payload)),
+      generateImage: (payload) => raw.assets.generateImage(toPlain(payload)),
       syncGenerated: (projectPath) => raw.assets.syncGenerated(projectPath),
       folders: (projectPath) => raw.assets.folders(projectPath),
       createFolder: (payload) => raw.assets.createFolder(toPlain(payload)),
@@ -132,6 +133,7 @@ const fallbackApi = {
     save: desktopOnly('保存资产'),
     remove: desktopOnly('删除资产'),
     import: desktopOnly('导入资产'),
+    generateImage: desktopOnly('AI 生成图片'),
     syncGenerated: desktopOnly('同步项目资产'),
     // 浏览器降级：文件夹注册表存于 localStorage，便于纯前端调试文件管理器交互
     folders: async (projectPath) => lsGet('qs_asset_folders_' + projectPath, []),

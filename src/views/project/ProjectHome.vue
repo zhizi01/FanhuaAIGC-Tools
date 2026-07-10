@@ -23,8 +23,10 @@ import {
   Save,
   Sparkles,
   Trash2,
+  Upload,
   UserRound,
   Video,
+  X,
   ZoomIn,
 } from 'lucide-vue-next'
 import { Modal, message } from 'ant-design-vue'
@@ -33,7 +35,8 @@ import { useAppStore } from '../../store/appState.js'
 import { useFlowCanvasStore } from '../../store/flowCanvas.js'
 import { useCanvasAiTaskStore } from '../../store/canvasAiTasks.js'
 import { api } from '../../services/bridge.js'
-import { assetUrl } from '../../utils/asset.js'
+import { resolveModel } from '../../services/ai.js'
+import { assetFileUrl, localFileUrl } from '../../utils/asset.js'
 
 const appStore = useAppStore()
 const flowStore = useFlowCanvasStore()
@@ -91,12 +94,18 @@ const imageDialog = reactive({
   visible: false,
   loading: false,
   importing: false,
+  generating: false,
   activeTab: 'upload',
   assets: [],
   assetId: '',
+  prompt: '',
+  references: [], // { type: 'local' | 'asset', value, name, thumbUrl }
   flowX: 0,
   flowY: 0,
 })
+
+// AI 生成时从资产库挑选参考图的子弹窗
+const refPicker = reactive({ visible: false, selectedIds: [] })
 
 // AI 分镜预览确认：生成成功后先弹窗核对，确认后再写入画布
 const storyboardPreview = reactive({
@@ -640,7 +649,7 @@ function updateNodeTitle(nodeId, title) {
 }
 
 function previewUrl(relFile) {
-  return assetUrl(project.value?.path, relFile)
+  return assetFileUrl(project.value?.path, relFile)
 }
 
 function markCoverBroken(id) {
@@ -743,6 +752,8 @@ async function addImageCard() {
   Object.assign(imageDialog, {
     visible: true,
     activeTab: 'upload',
+    prompt: '',
+    references: [],
     flowX: contextMenu.flowX,
     flowY: contextMenu.flowY,
   })
@@ -801,6 +812,100 @@ async function confirmImageCard() {
   } finally {
     imageDialog.loading = false
   }
+}
+
+// ---------- 图片节点：AI 生成 ----------
+async function addLocalReferences() {
+  if (!project.value?.path) return
+  try {
+    const filePaths = await api.dialog.selectAssetFiles()
+    if (!filePaths?.length) return
+    const imgs = filePaths.filter(isImagePath)
+    if (!imgs.length) return message.warning('请选择图片文件作为参考图')
+    imgs.forEach((p) =>
+      imageDialog.references.push({
+        type: 'local',
+        value: p,
+        name: p.split(/[\\/]/).pop() || '参考图',
+        thumbUrl: localFileUrl(p),
+      }),
+    )
+  } catch (err) {
+    message.error('选择参考图失败：' + err.message)
+  }
+}
+
+function removeReference(index) {
+  imageDialog.references.splice(index, 1)
+}
+
+function openRefPicker() {
+  refPicker.selectedIds = []
+  refPicker.visible = true
+}
+
+function toggleRefSelect(id) {
+  const i = refPicker.selectedIds.indexOf(id)
+  if (i >= 0) refPicker.selectedIds.splice(i, 1)
+  else refPicker.selectedIds.push(id)
+}
+
+function confirmRefPicker() {
+  imageDialog.assets
+    .filter((a) => refPicker.selectedIds.includes(a.id))
+    .forEach((a) => {
+      if (imageDialog.references.some((r) => r.type === 'asset' && r.value === (a.file || ''))) return
+      imageDialog.references.push({
+        type: 'asset',
+        value: a.file || '',
+        name: a.name || '参考图',
+        thumbUrl: previewUrl(a.thumbnail || a.file),
+      })
+    })
+  refPicker.visible = false
+}
+
+async function generateImageForCard() {
+  const prompt = imageDialog.prompt.trim()
+  if (!prompt) return message.warning('请填写生成描述')
+  if (!(appStore.settings.models || []).length) return message.warning('请先在设置页添加模型')
+  let model
+  try {
+    model = resolveModel(appStore.currentModelId)
+  } catch (err) {
+    return message.warning(err.message)
+  }
+  imageDialog.generating = true
+  try {
+    const asset = await api.assets.generateImage({
+      projectPath: project.value.path,
+      model: { baseUrl: model.baseUrl, apiKey: model.apiKey, modelCode: model.modelCode },
+      prompt,
+      references: imageDialog.references.map((r) => ({ type: r.type, value: r.value })),
+      folder: 'AI生成',
+    })
+    createImageNode(asset)
+    message.success('已生成图片并添加为节点')
+  } catch (err) {
+    message.error('生成图片失败：' + err.message)
+  } finally {
+    imageDialog.generating = false
+  }
+}
+
+const imageOkText = computed(() => {
+  if (imageDialog.activeTab === 'ai') return '生成并添加'
+  if (imageDialog.activeTab === 'library') return '添加图片卡片'
+  return '上传后自动添加'
+})
+const imageOkDisabled = computed(() => {
+  if (imageDialog.activeTab === 'upload') return true
+  if (imageDialog.activeTab === 'library') return !imageDialog.assetId
+  return !imageDialog.prompt.trim()
+})
+function confirmImageDialog() {
+  if (imageDialog.activeTab === 'library') return confirmImageCard()
+  if (imageDialog.activeTab === 'ai') return generateImageForCard()
 }
 
 function addStoryboardLayout() {
@@ -2251,12 +2356,15 @@ onBeforeUnmount(() => {
 
     <a-modal
       v-model:open="imageDialog.visible"
-      title="添加参考图片"
-      :confirm-loading="imageDialog.loading"
-      ok-text="添加图片卡片"
+      title="添加图片节点"
+      :confirm-loading="imageDialog.loading || imageDialog.generating"
+      :ok-text="imageOkText"
+      :ok-button-props="{ disabled: imageOkDisabled }"
+      :mask-closable="!imageDialog.generating"
+      :keyboard="!imageDialog.generating"
       cancel-text="取消"
       width="700px"
-      @ok="confirmImageCard"
+      @ok="confirmImageDialog"
     >
       <div class="node-picker">
         <a-tabs v-model:activeKey="imageDialog.activeTab">
@@ -2286,7 +2394,70 @@ onBeforeUnmount(() => {
               </button>
             </div>
           </a-tab-pane>
+          <a-tab-pane key="ai" tab="AI 生成">
+            <div class="ai-gen-panel">
+              <div class="ai-gen-field">
+                <label class="ai-gen-label">生成描述</label>
+                <a-textarea
+                  v-model:value="imageDialog.prompt"
+                  :rows="4"
+                  placeholder="描述想要生成的画面：场景、主体、动作、光线、氛围、风格等，越具体越好"
+                />
+              </div>
+              <div class="ai-gen-field">
+                <div class="ai-ref-head">
+                  <label class="ai-gen-label">参考图片（可选）</label>
+                  <div class="ai-ref-btns">
+                    <a-button size="small" @click="addLocalReferences">
+                      <template #icon><Upload :size="13" /></template>
+                      本地上传
+                    </a-button>
+                    <a-button size="small" @click="openRefPicker">
+                      <template #icon><Image :size="13" /></template>
+                      资产库选择
+                    </a-button>
+                  </div>
+                </div>
+                <div v-if="imageDialog.references.length" class="ai-ref-list">
+                  <div v-for="(r, i) in imageDialog.references" :key="i" class="ai-ref-chip">
+                    <img v-if="r.thumbUrl" :src="r.thumbUrl" :alt="r.name" />
+                    <Image v-else :size="18" />
+                    <span class="ai-ref-name" :title="r.name">{{ r.name }}</span>
+                    <button class="ai-ref-remove" title="移除" @click="removeReference(i)"><X :size="13" /></button>
+                  </div>
+                </div>
+                <p v-else class="ai-ref-empty">不添加参考图则按描述直接生成（文生图）；添加后会参考其风格与构图。</p>
+              </div>
+              <p class="ai-gen-tip">生成的图片会存入资产库「AI生成」文件夹，并自动创建图片节点。</p>
+            </div>
+          </a-tab-pane>
         </a-tabs>
+      </div>
+    </a-modal>
+
+    <a-modal
+      v-model:open="refPicker.visible"
+      title="从资产库选择参考图"
+      ok-text="加入参考"
+      cancel-text="取消"
+      width="640px"
+      @ok="confirmRefPicker"
+    >
+      <a-empty v-if="!imageDialog.assets.length" description="资产库暂无图片" />
+      <div v-else class="picker-grid asset-picker-grid">
+        <button
+          v-for="asset in imageDialog.assets"
+          :key="asset.id"
+          class="picker-card"
+          :class="{ active: refPicker.selectedIds.includes(asset.id) }"
+          @click="toggleRefSelect(asset.id)"
+        >
+          <div class="picker-thumb">
+            <img :src="previewUrl(asset.thumbnail || asset.file)" :alt="asset.name" />
+          </div>
+          <strong>{{ asset.name || '未命名图片' }}</strong>
+          <span>{{ asset.folder || '未归档' }}</span>
+        </button>
       </div>
     </a-modal>
 
@@ -4026,5 +4197,95 @@ onBeforeUnmount(() => {
   margin: 0;
   color: var(--text-tertiary);
   font-size: 12px;
+}
+
+/* 图片节点：AI 生成面板 */
+.ai-gen-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 238px;
+}
+.ai-gen-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ai-gen-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.ai-ref-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.ai-ref-btns {
+  display: flex;
+  gap: 8px;
+}
+.ai-ref-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.ai-ref-chip {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 30px 6px 6px;
+  max-width: 200px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
+}
+.ai-ref-chip img {
+  width: 34px;
+  height: 34px;
+  object-fit: cover;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+.ai-ref-name {
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ai-ref-remove {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  border-radius: 5px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+.ai-ref-remove:hover {
+  background: var(--bg-hover);
+  color: #ff4d4f;
+}
+.ai-ref-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.ai-gen-tip {
+  margin: 0;
+  padding-top: 4px;
+  font-size: 12px;
+  color: var(--text-tertiary);
 }
 </style>
