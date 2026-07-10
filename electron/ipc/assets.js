@@ -50,17 +50,44 @@ function indexFile(projectPath) {
 
 function readIndex(projectPath) {
   const file = indexFile(projectPath)
-  if (!fs.existsSync(file)) return { items: [] }
+  if (!fs.existsSync(file)) return { items: [], folders: [] }
   try {
     const data = JSON.parse(fs.readFileSync(file, 'utf-8'))
-    return { items: Array.isArray(data.items) ? data.items : [] }
+    return {
+      items: Array.isArray(data.items) ? data.items : [],
+      folders: Array.isArray(data.folders) ? data.folders : [],
+    }
   } catch {
-    return { items: [] }
+    return { items: [], folders: [] }
   }
 }
 
+// 写入索引：未显式传入 folders 时保留已有文件夹注册表，避免被覆盖清空
 function writeIndex(projectPath, index) {
-  fs.writeFileSync(indexFile(projectPath), JSON.stringify(index, null, 2), 'utf-8')
+  const folders = index.folders === undefined ? readIndex(projectPath).folders : index.folders
+  const payload = {
+    items: Array.isArray(index.items) ? index.items : [],
+    folders: Array.isArray(folders) ? folders : [],
+  }
+  fs.writeFileSync(indexFile(projectPath), JSON.stringify(payload, null, 2), 'utf-8')
+}
+
+// 归一化文件夹路径：反斜杠转正斜杠、去空段；「未归档」视作根目录（返回空串）
+function normalizePath(p) {
+  return String(p || '')
+    .replace(/\\/g, '/')
+    .split('/')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .join('/')
+}
+function normFolder(p) {
+  const s = normalizePath(p)
+  return s === '未归档' ? '' : s
+}
+// 存储用：根目录统一记作「未归档」，其余保留层级路径
+function storeFolder(p) {
+  return normFolder(p) || '未归档'
 }
 
 function metaPath(projectPath, id) {
@@ -104,6 +131,118 @@ export function registerAssetsIpc() {
       ...item,
       folder: item.folder || item.category || '未归档',
     }))
+  })
+
+  // 文件夹注册表（含空文件夹）：{ path, type, createdAt }，供资产库像文件管理器一样管理层级
+  ipcMain.handle('assets:folders', (_e, projectPath) => {
+    if (!projectPath) return []
+    return readIndex(projectPath).folders
+  })
+
+  // 新建文件夹（支持在当前层级下创建子文件夹），会自动补齐祖先层级
+  ipcMain.handle('assets:createFolder', (_e, payload) => {
+    const { projectPath, type, path: rawPath } = payload || {}
+    if (!projectPath || !type) throw new Error('缺少工程路径或资产类型')
+    const p = normFolder(rawPath)
+    if (!p) throw new Error('文件夹名称不能为空')
+    const index = readIndex(projectPath)
+    const folders = index.folders
+    if (folders.some((f) => f.type === type && normalizePath(f.path) === p)) {
+      throw new Error('同名文件夹已存在')
+    }
+    const now = new Date().toISOString()
+    let acc = ''
+    for (const seg of p.split('/')) {
+      acc = acc ? `${acc}/${seg}` : seg
+      if (!folders.some((f) => f.type === type && normalizePath(f.path) === acc)) {
+        folders.push({ path: acc, type, createdAt: now })
+      }
+    }
+    writeIndex(projectPath, { items: index.items, folders })
+    return folders
+  })
+
+  // 重命名文件夹：同步更新其子孙文件夹与其中资产的所属路径
+  ipcMain.handle('assets:renameFolder', (_e, payload) => {
+    const { projectPath, type, path: rawPath, name } = payload || {}
+    if (!projectPath || !type) throw new Error('缺少工程路径或资产类型')
+    const p = normFolder(rawPath)
+    const leaf = normalizePath(name)
+    if (!p) throw new Error('无法重命名根目录')
+    if (!leaf || leaf.includes('/')) throw new Error('文件夹名称不合法')
+    const parent = p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''
+    const newPath = parent ? `${parent}/${leaf}` : leaf
+    const index = readIndex(projectPath)
+    if (newPath === p) return { folders: index.folders, items: index.items }
+    if (index.folders.some((f) => f.type === type && normalizePath(f.path) === newPath)) {
+      throw new Error('同级已存在同名文件夹')
+    }
+    const prefix = `${p}/`
+    const remap = (fp) => (fp === p ? newPath : fp.startsWith(prefix) ? newPath + fp.slice(p.length) : fp)
+    const now = new Date().toISOString()
+    const folders = index.folders.map((f) => {
+      if (f.type !== type) return f
+      const fp = normalizePath(f.path)
+      return fp === p || fp.startsWith(prefix) ? { ...f, path: remap(fp) } : f
+    })
+    const items = index.items.map((it) => {
+      if (it.type !== type) return it
+      const fp = normFolder(it.folder)
+      if (fp !== p && !fp.startsWith(prefix)) return it
+      const np = storeFolder(remap(fp))
+      const meta = readMeta(projectPath, it.id)
+      if (meta) {
+        meta.folder = np
+        meta.updatedAt = now
+        writeMeta(projectPath, meta)
+      }
+      return { ...it, folder: np }
+    })
+    writeIndex(projectPath, { items, folders })
+    return { folders, items }
+  })
+
+  // 删除文件夹：其中（含子孙）资产移回根目录「未归档」，仅移除文件夹登记，不删除资产文件
+  ipcMain.handle('assets:removeFolder', (_e, payload) => {
+    const { projectPath, type, path: rawPath } = payload || {}
+    if (!projectPath || !type) throw new Error('缺少工程路径或资产类型')
+    const p = normFolder(rawPath)
+    if (!p) throw new Error('无法删除根目录')
+    const index = readIndex(projectPath)
+    const prefix = `${p}/`
+    const folders = index.folders.filter(
+      (f) => !(f.type === type && (normalizePath(f.path) === p || normalizePath(f.path).startsWith(prefix))),
+    )
+    const now = new Date().toISOString()
+    const items = index.items.map((it) => {
+      if (it.type !== type) return it
+      const fp = normFolder(it.folder)
+      if (fp !== p && !fp.startsWith(prefix)) return it
+      const meta = readMeta(projectPath, it.id)
+      if (meta) {
+        meta.folder = '未归档'
+        meta.updatedAt = now
+        writeMeta(projectPath, meta)
+      }
+      return { ...it, folder: '未归档' }
+    })
+    writeIndex(projectPath, { items, folders })
+    return { folders, items }
+  })
+
+  // 移动资产到指定文件夹（供拖拽/详情面板使用）
+  ipcMain.handle('assets:move', (_e, payload) => {
+    const { projectPath, assetId, folder } = payload || {}
+    if (!projectPath || !assetId) throw new Error('缺少工程路径或资产ID')
+    const meta = readMeta(projectPath, assetId)
+    if (!meta) throw new Error('资产不存在')
+    meta.folder = storeFolder(folder)
+    meta.updatedAt = new Date().toISOString()
+    writeMeta(projectPath, meta)
+    const index = readIndex(projectPath)
+    const items = index.items.map((it) => (it.id === assetId ? { ...it, folder: meta.folder } : it))
+    writeIndex(projectPath, { items, folders: index.folders })
+    return meta
   })
 
   ipcMain.handle('assets:read', (_e, payload) => {
@@ -158,9 +297,10 @@ export function registerAssetsIpc() {
 
   // 导入资产：复制到工程内 files/（图片同时复制为缩略图），生成 meta 与索引
   ipcMain.handle('assets:import', (_e, payload) => {
-    const { projectPath, filePaths } = payload || {}
+    const { projectPath, filePaths, folder } = payload || {}
     if (!projectPath) throw new Error('缺少工程路径')
     const list = Array.isArray(filePaths) ? filePaths : []
+    const targetFolder = storeFolder(folder)
     const dir = assetsDir(projectPath)
     const now = new Date().toISOString()
     const created = []
@@ -195,7 +335,7 @@ export function registerAssetsIpc() {
         id,
         name: originalName.replace(/\.[^.]+$/, '') || '未命名资产',
         type,
-        folder: '导入资产',
+        folder: targetFolder,
         source: 'import',
         sourceRef: '',
         managedFile: true,

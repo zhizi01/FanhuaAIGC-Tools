@@ -1,12 +1,10 @@
 <script setup>
-// 资产库：当前作品的素材管理
-// 左：类型/文件夹筛选 中：资产网格/列表 + 导入/同步 右：资产详情编辑与预览
+// 资产库：按「文本 / 图片 / 视频」分类的资产管理，像文件管理器一样支持多层文件夹
+// 顶部 Tab 切换资产类型，工具栏含面包屑与新建文件夹/导入；主区展示文件夹与资产，可拖拽移动；右侧编辑详情。
 import { computed, onMounted, reactive, ref } from 'vue'
 import { message, Modal } from 'ant-design-vue'
 import {
-  Package,
   Image as ImageIcon,
-  Music,
   Video as VideoIcon,
   FileText,
   Upload,
@@ -16,7 +14,12 @@ import {
   List as ListIcon,
   Save,
   Folder,
+  FolderPlus,
+  FolderOpen,
   RefreshCw,
+  ChevronRight,
+  Pencil,
+  Package,
 } from 'lucide-vue-next'
 import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '../../store/appState.js'
@@ -28,26 +31,26 @@ const route = useRoute()
 const router = useRouter()
 const project = computed(() => appStore.currentProject)
 
-const TYPE_FILTERS = [
-  { value: '', label: '全部资产', icon: Package },
-  { value: 'image', label: '图片', icon: ImageIcon },
-  { value: 'audio', label: '音频', icon: Music },
-  { value: 'video', label: '视频', icon: VideoIcon },
-  { value: 'document', label: '文档', icon: FileText },
+// 三大资产分类（默认文本），与后端 detectType 的类型对应
+const TABS = [
+  { type: 'document', label: '文本资产', icon: FileText, exts: ['txt', 'md', 'docx', 'pdf'] },
+  { type: 'image', label: '图片资产', icon: ImageIcon, exts: ['png', 'jpg', 'jpeg', 'webp', 'gif'] },
+  { type: 'video', label: '视频资产', icon: VideoIcon, exts: ['mp4', 'mov', 'webm'] },
 ]
 
 const assets = ref([])
+const folderReg = ref([]) // 文件夹注册表（含空文件夹），跨类型
+const activeType = ref('document')
+const currentPath = ref('') // 当前所在文件夹路径（'' 表示根目录）
+
 const loading = ref(false)
 const importing = ref(false)
 const syncing = ref(false)
 const saving = ref(false)
-
 const search = ref('')
-const filterType = ref('')
-const filterFolder = ref('')
 const viewMode = ref('grid') // grid | list
 
-const detail = ref(null) // 完整 meta
+const detail = ref(null)
 const dirty = ref(false)
 const form = reactive({
   id: '',
@@ -59,10 +62,173 @@ const form = reactive({
   linkedEpisodes: [],
 })
 
-// 关联可选项：角色与剧集
 const roleOptions = ref([])
 const episodeOptions = ref([])
 
+// 新建/重命名文件夹弹窗
+const folderDialog = reactive({ visible: false, mode: 'create', path: '', name: '' })
+
+// 拖拽移动
+const draggingAssetId = ref('')
+const dragOverPath = ref(null)
+
+const activeTab = computed(() => TABS.find((t) => t.type === activeType.value) || TABS[0])
+const activeLabel = computed(() => activeTab.value.label)
+
+function normFolder(f) {
+  const s = String(f || '')
+    .replace(/\\/g, '/')
+    .split('/')
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .join('/')
+  return s === '未归档' ? '' : s
+}
+function parentOf(p) {
+  return p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''
+}
+function leafOf(p) {
+  return p.includes('/') ? p.slice(p.lastIndexOf('/') + 1) : p
+}
+function extOf(fp) {
+  const s = String(fp || '')
+  return s.includes('.') ? s.slice(s.lastIndexOf('.') + 1).toLowerCase() : ''
+}
+
+const typeAssets = computed(() => assets.value.filter((a) => a.type === activeType.value))
+
+const typeCounts = computed(() => {
+  const counts = { document: 0, image: 0, video: 0 }
+  assets.value.forEach((a) => {
+    if (counts[a.type] != null) counts[a.type] += 1
+  })
+  return counts
+})
+
+// 当前类型下的全部文件夹路径（注册表 ∪ 资产推导出的层级）
+function folderPaths(type) {
+  const set = new Set()
+  folderReg.value.forEach((f) => {
+    if (f.type !== type) return
+    const p = normFolder(f.path)
+    if (p) set.add(p)
+  })
+  assets.value.forEach((a) => {
+    if (a.type !== type) return
+    let p = normFolder(a.folder)
+    while (p) {
+      set.add(p)
+      p = parentOf(p)
+    }
+  })
+  return [...set]
+}
+
+function descendantCount(p) {
+  const prefix = p + '/'
+  return typeAssets.value.filter((a) => {
+    const fp = normFolder(a.folder)
+    return fp === p || fp.startsWith(prefix)
+  }).length
+}
+
+// 当前文件夹下的直接子文件夹
+const currentFolders = computed(() => {
+  if (search.value.trim()) return []
+  const prefix = currentPath.value ? currentPath.value + '/' : ''
+  return folderPaths(activeType.value)
+    .filter((p) => {
+      if (!p.startsWith(prefix)) return false
+      const rest = p.slice(prefix.length)
+      return rest && !rest.includes('/')
+    })
+    .sort((a, b) => a.localeCompare(b, 'zh'))
+    .map((p) => ({ path: p, name: leafOf(p), count: descendantCount(p) }))
+})
+
+// 当前文件夹下的资产（搜索时跨当前类型全量匹配）
+const currentAssets = computed(() => {
+  const kw = search.value.trim().toLowerCase()
+  if (kw) {
+    return typeAssets.value.filter((a) => {
+      const hay = [a.name, a.folder, a.originalName].filter(Boolean).join(' ').toLowerCase()
+      return hay.includes(kw)
+    })
+  }
+  return typeAssets.value.filter((a) => normFolder(a.folder) === currentPath.value)
+})
+
+const breadcrumbs = computed(() => {
+  const crumbs = [{ label: activeLabel.value, path: '' }]
+  if (!currentPath.value) return crumbs
+  let acc = ''
+  currentPath.value.split('/').forEach((seg) => {
+    acc = acc ? acc + '/' + seg : seg
+    crumbs.push({ label: seg, path: acc })
+  })
+  return crumbs
+})
+
+// 详情面板「所在文件夹」树选择数据
+const folderTree = computed(() => {
+  const type = detail.value?.type || activeType.value
+  const nodeMap = new Map()
+  const rootChildren = []
+  folderPaths(type)
+    .sort((a, b) => a.localeCompare(b, 'zh'))
+    .forEach((p) => {
+      let parentChildren = rootChildren
+      let acc = ''
+      p.split('/').forEach((seg) => {
+        acc = acc ? acc + '/' + seg : seg
+        let node = nodeMap.get(acc)
+        if (!node) {
+          node = { value: acc, title: seg, children: [] }
+          nodeMap.set(acc, node)
+          parentChildren.push(node)
+        }
+        parentChildren = node.children
+      })
+    })
+  return [{ value: '未归档', title: '根目录（未归档）', children: rootChildren }]
+})
+
+function typeIcon(type) {
+  if (type === 'image') return ImageIcon
+  if (type === 'video') return VideoIcon
+  if (type === 'document') return FileText
+  return Package
+}
+function thumbFor(a) {
+  if (a.type === 'image') return assetUrl(project.value?.path, a.thumbnail || a.file)
+  return ''
+}
+function sourceLabel(source) {
+  if (source === 'generated') return '项目生成'
+  if (source === 'import') return '手动导入'
+  return source || '未知'
+}
+const previewUrl = computed(() => (detail.value ? assetUrl(project.value?.path, detail.value.file) : ''))
+
+async function loadAssets() {
+  if (!project.value?.path) return
+  loading.value = true
+  try {
+    assets.value = await api.assets.list(project.value.path)
+  } catch (err) {
+    message.error('加载资产失败：' + err.message)
+  } finally {
+    loading.value = false
+  }
+}
+async function loadFolders() {
+  if (!project.value?.path) return
+  try {
+    folderReg.value = await api.assets.folders(project.value.path)
+  } catch {
+    folderReg.value = []
+  }
+}
 async function loadRoleOptions() {
   if (!project.value?.path) return
   try {
@@ -87,62 +253,83 @@ async function loadEpisodeOptions() {
   }
 }
 
-const filteredAssets = computed(() => {
-  const kw = search.value.trim().toLowerCase()
-  return assets.value.filter((a) => {
-    if (filterType.value && a.type !== filterType.value) return false
-    if (filterFolder.value && (a.folder || '未归档') !== filterFolder.value) return false
-    const haystack = [a.name, a.folder, a.originalName].filter(Boolean).join(' ').toLowerCase()
-    if (kw && !haystack.includes(kw)) return false
-    return true
-  })
-})
-
-const folderOptions = computed(() => {
-  const set = new Set(['未归档'])
-  assets.value.forEach((a) => set.add(a.folder || '未归档'))
-  return [...set].map((f) => ({ value: f, label: f }))
-})
-
-const typeCounts = computed(() => {
-  const counts = { '': assets.value.length, image: 0, audio: 0, video: 0, document: 0 }
-  assets.value.forEach((a) => {
-    if (counts[a.type] != null) counts[a.type] += 1
-  })
-  return counts
-})
-
-function typeIcon(type) {
-  if (type === 'image') return ImageIcon
-  if (type === 'audio') return Music
-  if (type === 'video') return VideoIcon
-  if (type === 'document') return FileText
-  return Package
+function switchTab(type) {
+  if (type === activeType.value) return
+  activeType.value = type
+  currentPath.value = ''
+  search.value = ''
+}
+function enterFolder(path) {
+  currentPath.value = path
+  search.value = ''
+}
+function goCrumb(path) {
+  currentPath.value = path
 }
 
-function thumbFor(a) {
-  if (a.type === 'image') return assetUrl(project.value?.path, a.thumbnail || a.file)
-  return ''
+function openCreateFolder() {
+  folderDialog.mode = 'create'
+  folderDialog.path = currentPath.value
+  folderDialog.name = ''
+  folderDialog.visible = true
 }
-
-function sourceLabel(source) {
-  if (source === 'generated') return '项目生成'
-  if (source === 'import') return '手动导入'
-  return source || '未知'
+function openRenameFolder(path) {
+  folderDialog.mode = 'rename'
+  folderDialog.path = path
+  folderDialog.name = leafOf(path)
+  folderDialog.visible = true
 }
-
-const previewUrl = computed(() => (detail.value ? assetUrl(project.value?.path, detail.value.file) : ''))
-
-async function loadAssets() {
-  if (!project.value?.path) return
-  loading.value = true
+async function submitFolderDialog() {
+  const name = folderDialog.name.trim()
+  if (!name) return message.warning('请输入文件夹名称')
+  if (name.includes('/') || name.includes('\\')) return message.warning('名称不能包含斜杠')
   try {
-    assets.value = await api.assets.list(project.value.path)
+    if (folderDialog.mode === 'create') {
+      const full = folderDialog.path ? folderDialog.path + '/' + name : name
+      if (folderPaths(activeType.value).includes(full)) return message.warning('同名文件夹已存在')
+      await api.assets.createFolder({ projectPath: project.value.path, type: activeType.value, path: full })
+      message.success('已新建文件夹')
+    } else {
+      const oldPath = folderDialog.path
+      const newPath = parentOf(oldPath) ? parentOf(oldPath) + '/' + name : name
+      await api.assets.renameFolder({
+        projectPath: project.value.path,
+        type: activeType.value,
+        path: oldPath,
+        name,
+      })
+      // 若当前所在目录处于被重命名的子树内，同步更新路径
+      if (currentPath.value === oldPath) currentPath.value = newPath
+      else if (currentPath.value.startsWith(oldPath + '/'))
+        currentPath.value = newPath + currentPath.value.slice(oldPath.length)
+      message.success('已重命名文件夹')
+    }
+    folderDialog.visible = false
+    await Promise.all([loadFolders(), loadAssets()])
   } catch (err) {
-    message.error('加载资产失败：' + err.message)
-  } finally {
-    loading.value = false
+    message.error(err.message)
   }
+}
+function confirmRemoveFolder(path) {
+  Modal.confirm({
+    title: '删除文件夹',
+    content: `确定删除「${leafOf(path)}」吗？文件夹内的资产会移动到根目录，不会删除资产文件。`,
+    okText: '删除',
+    okType: 'danger',
+    cancelText: '取消',
+    async onOk() {
+      try {
+        await api.assets.removeFolder({ projectPath: project.value.path, type: activeType.value, path })
+        if (currentPath.value === path || currentPath.value.startsWith(path + '/')) {
+          currentPath.value = parentOf(path)
+        }
+        await Promise.all([loadFolders(), loadAssets()])
+        message.success('已删除文件夹')
+      } catch (err) {
+        message.error('删除失败：' + err.message)
+      }
+    },
+  })
 }
 
 async function importAssets() {
@@ -150,10 +337,18 @@ async function importAssets() {
   try {
     const filePaths = await api.dialog.selectAssetFiles()
     if (!filePaths || !filePaths.length) return
+    const exts = activeTab.value.exts
+    const matched = filePaths.filter((fp) => exts.includes(extOf(fp)))
+    if (!matched.length) return message.warning(`请选择${activeLabel.value}支持的文件类型`)
     importing.value = true
-    const created = await api.assets.import({ projectPath: project.value.path, filePaths })
+    const created = await api.assets.import({
+      projectPath: project.value.path,
+      filePaths: matched,
+      folder: currentPath.value || '未归档',
+    })
     await loadAssets()
     message.success(`已导入 ${created.length} 个资产`)
+    if (matched.length < filePaths.length) message.info('已跳过与当前分类不匹配的文件')
     if (created.length) selectAsset(created[0].id)
   } catch (err) {
     message.error('导入失败：' + err.message)
@@ -169,7 +364,10 @@ async function syncGeneratedAssets() {
     const synced = await api.assets.syncGenerated(project.value.path)
     await loadAssets()
     message.success(`已同步 ${synced.length} 个项目资产`)
-    if (synced.length) selectAsset(synced[0].id)
+    if (synced.length) {
+      activeType.value = 'document'
+      selectAsset(synced[0].id)
+    }
   } catch (err) {
     message.error('同步失败：' + err.message)
   } finally {
@@ -190,7 +388,6 @@ async function selectAsset(id) {
   }
   doSelect(id)
 }
-
 async function doSelect(id) {
   try {
     const meta = await api.assets.read({ projectPath: project.value.path, assetId: id })
@@ -209,7 +406,6 @@ async function doSelect(id) {
     message.error('读取资产失败：' + err.message)
   }
 }
-
 async function saveDetail() {
   if (!detail.value) return
   saving.value = true
@@ -219,14 +415,14 @@ async function saveDetail() {
       asset: {
         id: form.id,
         name: form.name.trim() || '未命名资产',
-        folder: form.folder.trim() || '未归档',
+        folder: form.folder || '未归档',
         description: form.description,
         usage: form.usage,
         linkedRoleIds: form.linkedRoleIds,
         linkedEpisodes: form.linkedEpisodes,
       },
     })
-    await loadAssets()
+    await Promise.all([loadAssets(), loadFolders()])
     dirty.value = false
     message.success('已保存')
   } catch (err) {
@@ -235,7 +431,6 @@ async function saveDetail() {
     saving.value = false
   }
 }
-
 function removeAsset() {
   if (!detail.value) return
   const id = detail.value.id
@@ -263,19 +458,52 @@ function removeAsset() {
     },
   })
 }
-
 function markDirty() {
   dirty.value = true
 }
 
+// ---------- 拖拽移动资产 ----------
+function onAssetDragStart(id, e) {
+  draggingAssetId.value = id
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
+}
+function onAssetDragEnd() {
+  draggingAssetId.value = ''
+  dragOverPath.value = null
+}
+function onDropTarget(path) {
+  if (draggingAssetId.value) dragOverPath.value = path
+}
+async function dropToFolder(path) {
+  const id = draggingAssetId.value
+  draggingAssetId.value = ''
+  dragOverPath.value = null
+  if (!id) return
+  const asset = assets.value.find((a) => a.id === id)
+  if (!asset || normFolder(asset.folder) === normFolder(path)) return
+  try {
+    await api.assets.move({ projectPath: project.value.path, assetId: id, folder: path || '未归档' })
+    await loadAssets()
+    if (detail.value?.id === id) doSelect(id)
+    message.success(`已移动到「${path ? leafOf(path) : '根目录'}」`)
+  } catch (err) {
+    message.error('移动失败：' + err.message)
+  }
+}
+
 onMounted(async () => {
-  await loadAssets()
+  await Promise.all([loadAssets(), loadFolders()])
   loadRoleOptions()
   loadEpisodeOptions()
-  // 从工程画布「编辑图片」跳转而来：定位到对应资产并进入编辑
+  // 从工程画布「编辑图片」跳转而来：切到对应分类与文件夹并选中
   const targetAssetId = route.query.assetId
   if (targetAssetId) {
     router.replace({ path: '/project/assets' })
+    const hit = assets.value.find((a) => a.id === String(targetAssetId))
+    if (hit) {
+      if (TABS.some((t) => t.type === hit.type)) activeType.value = hit.type
+      currentPath.value = normFolder(hit.folder)
+    }
     selectAsset(String(targetAssetId))
   }
 })
@@ -283,172 +511,258 @@ onMounted(async () => {
 
 <template>
   <div class="asset-library">
-    <!-- 左：类型 / 文件夹筛选 -->
-    <aside class="asset-side">
-      <div class="side-label">类型</div>
-      <button
-        v-for="t in TYPE_FILTERS"
-        :key="t.value"
-        class="type-item"
-        :class="{ active: filterType === t.value }"
-        @click="filterType = t.value"
-      >
-        <component :is="t.icon" :size="16" />
-        <span class="type-name">{{ t.label }}</span>
-        <span class="type-count">{{ typeCounts[t.value] ?? 0 }}</span>
-      </button>
+    <!-- 顶部分类 Tab -->
+    <div class="asset-tabs">
+      <div class="tab-group">
+        <button
+          v-for="t in TABS"
+          :key="t.type"
+          class="tab-item"
+          :class="{ active: activeType === t.type }"
+          @click="switchTab(t.type)"
+        >
+          <component :is="t.icon" :size="16" />
+          <span>{{ t.label }}</span>
+          <span class="tab-count">{{ typeCounts[t.type] }}</span>
+        </button>
+      </div>
+      <div class="asset-search">
+        <Search :size="15" class="search-ico" />
+        <input v-model="search" class="search-input" :placeholder="`在${activeLabel}中搜索`" />
+      </div>
+    </div>
 
-      <div class="side-label mt">文件夹</div>
-      <a-select
-        v-model:value="filterFolder"
-        class="w-full"
-        size="small"
-        :options="[{ value: '', label: '全部文件夹' }, ...folderOptions]"
-      />
-    </aside>
-
-    <!-- 中：资产网格 / 列表 -->
-    <section class="asset-main">
-      <header class="asset-toolbar">
-        <div class="asset-search">
-          <Search :size="15" class="search-ico" />
-          <input v-model="search" class="search-input" placeholder="搜索资产名称" />
+    <!-- 工具栏：面包屑 + 操作 -->
+    <header class="asset-toolbar">
+      <nav class="crumbs">
+        <template v-for="(c, i) in breadcrumbs" :key="c.path">
+          <ChevronRight v-if="i > 0" :size="14" class="crumb-sep" />
+          <button
+            class="crumb"
+            :class="{ current: c.path === currentPath, drop: dragOverPath === c.path && draggingAssetId }"
+            @click="goCrumb(c.path)"
+            @dragover.prevent="onDropTarget(c.path)"
+            @dragleave="dragOverPath = null"
+            @drop.prevent="dropToFolder(c.path)"
+          >
+            <FolderOpen v-if="i === 0" :size="14" />
+            {{ c.label }}
+          </button>
+        </template>
+      </nav>
+      <div class="toolbar-right">
+        <div class="view-switch">
+          <button class="view-btn" :class="{ active: viewMode === 'grid' }" title="网格" @click="viewMode = 'grid'">
+            <LayoutGrid :size="15" />
+          </button>
+          <button class="view-btn" :class="{ active: viewMode === 'list' }" title="列表" @click="viewMode = 'list'">
+            <ListIcon :size="15" />
+          </button>
         </div>
-        <div class="toolbar-right">
-          <div class="view-switch">
-            <button class="view-btn" :class="{ active: viewMode === 'grid' }" title="网格" @click="viewMode = 'grid'">
-              <LayoutGrid :size="15" />
-            </button>
-            <button class="view-btn" :class="{ active: viewMode === 'list' }" title="列表" @click="viewMode = 'list'">
-              <ListIcon :size="15" />
-            </button>
-          </div>
-          <a-button type="primary" :loading="importing" @click="importAssets">
-            <template #icon><Upload :size="15" /></template>
-            导入资产
-          </a-button>
-          <a-button :loading="syncing" @click="syncGeneratedAssets">
-            <template #icon><RefreshCw :size="15" /></template>
-            同步项目资产
-          </a-button>
-        </div>
-      </header>
+        <a-button @click="openCreateFolder">
+          <template #icon><FolderPlus :size="15" /></template>
+          新建文件夹
+        </a-button>
+        <a-button v-if="activeType === 'document'" :loading="syncing" @click="syncGeneratedAssets">
+          <template #icon><RefreshCw :size="15" /></template>
+          同步项目资产
+        </a-button>
+        <a-button type="primary" :loading="importing" @click="importAssets">
+          <template #icon><Upload :size="15" /></template>
+          导入{{ activeLabel }}
+        </a-button>
+      </div>
+    </header>
 
-      <div class="asset-scroll">
-        <a-spin :spinning="loading">
-          <div v-if="!filteredAssets.length" class="asset-empty">
-            <div class="empty-icon"><Package :size="30" /></div>
-            <h3>{{ assets.length ? '没有匹配的资产' : '还没有任何资产' }}</h3>
-            <p>可导入本地素材，也可以点击「同步项目资产」把剧本等生成内容纳入资产库。</p>
-          </div>
-
-          <!-- 网格 -->
-          <div v-else-if="viewMode === 'grid'" class="asset-grid">
-            <button
-              v-for="a in filteredAssets"
-              :key="a.id"
-              class="grid-item"
-              :class="{ active: detail && detail.id === a.id }"
-              @click="selectAsset(a.id)"
-            >
-              <div class="grid-thumb">
-                <img v-if="thumbFor(a)" :src="thumbFor(a)" :alt="a.name" />
-                <component v-else :is="typeIcon(a.type)" :size="26" />
-              </div>
-              <div class="grid-name" :title="a.name">{{ a.name }}</div>
-            </button>
-          </div>
-
-          <!-- 列表 -->
-          <div v-else class="asset-list">
-            <button
-              v-for="a in filteredAssets"
-              :key="a.id"
-              class="list-item"
-              :class="{ active: detail && detail.id === a.id }"
-              @click="selectAsset(a.id)"
-            >
-              <div class="list-thumb">
-                <img v-if="thumbFor(a)" :src="thumbFor(a)" :alt="a.name" />
-                <component v-else :is="typeIcon(a.type)" :size="18" />
-              </div>
-              <div class="list-info">
-                <div class="list-name">{{ a.name }}</div>
-                <div class="list-meta">
-                  <Folder :size="12" />
-                  <span>{{ a.folder || '未归档' }}</span>
+    <div class="asset-body">
+      <section class="asset-main">
+        <div class="asset-scroll">
+          <a-spin :spinning="loading">
+            <!-- 文件夹区 -->
+            <div v-if="currentFolders.length" class="folder-grid">
+              <div
+                v-for="f in currentFolders"
+                :key="f.path"
+                class="folder-card"
+                :class="{ drop: dragOverPath === f.path && draggingAssetId }"
+                @dblclick="enterFolder(f.path)"
+                @dragover.prevent="onDropTarget(f.path)"
+                @dragleave="dragOverPath = null"
+                @drop.prevent="dropToFolder(f.path)"
+              >
+                <button class="folder-open" @click="enterFolder(f.path)">
+                  <Folder :size="20" />
+                  <div class="folder-info">
+                    <span class="folder-name" :title="f.name">{{ f.name }}</span>
+                    <span class="folder-count">{{ f.count }} 项</span>
+                  </div>
+                </button>
+                <div class="folder-ops">
+                  <button title="重命名" @click.stop="openRenameFolder(f.path)"><Pencil :size="13" /></button>
+                  <button title="删除" @click.stop="confirmRemoveFolder(f.path)"><Trash2 :size="13" /></button>
                 </div>
               </div>
-            </button>
-          </div>
-        </a-spin>
-      </div>
-    </section>
+            </div>
 
-    <!-- 右：资产详情 -->
-    <aside v-if="detail" class="asset-detail">
-      <div class="detail-preview">
-        <img v-if="detail.type === 'image'" :src="previewUrl" :alt="detail.name" class="preview-img" />
-        <audio v-else-if="detail.type === 'audio'" :src="previewUrl" controls class="preview-audio" />
-        <video v-else-if="detail.type === 'video'" :src="previewUrl" controls class="preview-video" />
-        <div v-else class="preview-file">
-          <component :is="typeIcon(detail.type)" :size="40" />
-          <span>{{ detail.originalName }}</span>
+            <div v-if="currentFolders.length && currentAssets.length" class="section-split">
+              <span>{{ search.trim() ? '搜索结果' : '当前文件夹资产' }}</span>
+            </div>
+
+            <!-- 资产为空 -->
+            <div v-if="!currentFolders.length && !currentAssets.length" class="asset-empty">
+              <div class="empty-icon"><component :is="activeTab.icon" :size="30" /></div>
+              <h3>{{ search.trim() ? '没有匹配的资产' : `这里还没有${activeLabel}` }}</h3>
+              <p>
+                可点击右上角「导入{{ activeLabel }}」添加素材<template v-if="activeType === 'document'">，或「同步项目资产」纳入剧本内容</template>；也可新建文件夹分类管理。
+              </p>
+            </div>
+
+            <!-- 资产网格 -->
+            <div v-else-if="viewMode === 'grid'" class="asset-grid">
+              <div
+                v-for="a in currentAssets"
+                :key="a.id"
+                class="grid-item"
+                :class="{ active: detail && detail.id === a.id, dragging: draggingAssetId === a.id }"
+                draggable="true"
+                @click="selectAsset(a.id)"
+                @dragstart="onAssetDragStart(a.id, $event)"
+                @dragend="onAssetDragEnd"
+              >
+                <div class="grid-thumb">
+                  <img v-if="thumbFor(a)" :src="thumbFor(a)" :alt="a.name" />
+                  <component v-else :is="typeIcon(a.type)" :size="26" />
+                </div>
+                <div class="grid-name" :title="a.name">{{ a.name }}</div>
+                <div v-if="search.trim()" class="grid-path" :title="a.folder">
+                  <Folder :size="11" /> {{ normFolder(a.folder) || '根目录' }}
+                </div>
+              </div>
+            </div>
+
+            <!-- 资产列表 -->
+            <div v-else class="asset-list">
+              <div
+                v-for="a in currentAssets"
+                :key="a.id"
+                class="list-item"
+                :class="{ active: detail && detail.id === a.id, dragging: draggingAssetId === a.id }"
+                draggable="true"
+                @click="selectAsset(a.id)"
+                @dragstart="onAssetDragStart(a.id, $event)"
+                @dragend="onAssetDragEnd"
+              >
+                <div class="list-thumb">
+                  <img v-if="thumbFor(a)" :src="thumbFor(a)" :alt="a.name" />
+                  <component v-else :is="typeIcon(a.type)" :size="18" />
+                </div>
+                <div class="list-info">
+                  <div class="list-name">{{ a.name }}</div>
+                  <div class="list-meta">
+                    <Folder :size="12" />
+                    <span>{{ normFolder(a.folder) || '根目录' }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </a-spin>
         </div>
-      </div>
+      </section>
 
-      <a-form layout="vertical" class="detail-form">
-        <a-form-item label="名称">
-          <a-input v-model:value="form.name" @change="markDirty" />
-        </a-form-item>
-        <a-form-item label="文件夹">
-          <a-input v-model:value="form.folder" placeholder="如：剧本 / 角色参考 / 场景素材" @change="markDirty" />
-        </a-form-item>
-        <a-form-item label="用途">
-          <a-input v-model:value="form.usage" placeholder="如：角色形象参考" @change="markDirty" />
-        </a-form-item>
-        <a-form-item label="描述">
-          <a-textarea v-model:value="form.description" :rows="3" @change="markDirty" />
-        </a-form-item>
-        <a-form-item label="关联角色">
-          <a-select
-            v-model:value="form.linkedRoleIds"
-            mode="multiple"
-            placeholder="关联到角色"
-            :options="roleOptions"
-            @change="markDirty"
-          />
-        </a-form-item>
-        <a-form-item label="关联剧集">
-          <a-select
-            v-model:value="form.linkedEpisodes"
-            mode="multiple"
-            placeholder="关联到剧集"
-            :options="episodeOptions"
-            @change="markDirty"
-          />
-        </a-form-item>
-      </a-form>
+      <!-- 右：资产详情 -->
+      <aside v-if="detail" class="asset-detail">
+        <div class="detail-preview">
+          <img v-if="detail.type === 'image'" :src="previewUrl" :alt="detail.name" class="preview-img" />
+          <video v-else-if="detail.type === 'video'" :src="previewUrl" controls class="preview-video" />
+          <div v-else class="preview-file">
+            <component :is="typeIcon(detail.type)" :size="40" />
+            <span>{{ detail.originalName }}</span>
+          </div>
+        </div>
 
-      <div class="detail-info">
-        <div class="info-row"><span>类型</span><b>{{ detail.type }}</b></div>
-        <div class="info-row"><span>来源</span><b>{{ sourceLabel(detail.source) }}</b></div>
-        <div class="info-row"><span>文件夹</span><b>{{ detail.folder || '未归档' }}</b></div>
-        <div class="info-row"><span>大小</span><b>{{ formatSize(detail.size) }}</b></div>
-        <div class="info-row"><span>原始文件</span><b class="ellipsis" :title="detail.originalName">{{ detail.originalName }}</b></div>
-      </div>
+        <a-form layout="vertical" class="detail-form">
+          <a-form-item label="名称">
+            <a-input v-model:value="form.name" @change="markDirty" />
+          </a-form-item>
+          <a-form-item label="所在文件夹">
+            <a-tree-select
+              v-model:value="form.folder"
+              :tree-data="folderTree"
+              tree-default-expand-all
+              placeholder="选择文件夹"
+              @change="markDirty"
+            />
+          </a-form-item>
+          <a-form-item label="用途">
+            <a-input v-model:value="form.usage" placeholder="如：角色形象参考" @change="markDirty" />
+          </a-form-item>
+          <a-form-item label="描述">
+            <a-textarea v-model:value="form.description" :rows="3" @change="markDirty" />
+          </a-form-item>
+          <a-form-item label="关联角色">
+            <a-select
+              v-model:value="form.linkedRoleIds"
+              mode="multiple"
+              placeholder="关联到角色"
+              :options="roleOptions"
+              @change="markDirty"
+            />
+          </a-form-item>
+          <a-form-item label="关联剧集">
+            <a-select
+              v-model:value="form.linkedEpisodes"
+              mode="multiple"
+              placeholder="关联到剧集"
+              :options="episodeOptions"
+              @change="markDirty"
+            />
+          </a-form-item>
+        </a-form>
 
-      <div class="detail-actions">
-        <a-button danger @click="removeAsset">
-          <template #icon><Trash2 :size="15" /></template>
-          删除
-        </a-button>
-        <a-button type="primary" :loading="saving" :disabled="!dirty" @click="saveDetail">
-          <template #icon><Save :size="15" /></template>
-          保存
-        </a-button>
+        <div class="detail-info">
+          <div class="info-row"><span>来源</span><b>{{ sourceLabel(detail.source) }}</b></div>
+          <div class="info-row"><span>大小</span><b>{{ formatSize(detail.size) }}</b></div>
+          <div class="info-row"><span>原始文件</span><b class="ellipsis" :title="detail.originalName">{{ detail.originalName }}</b></div>
+        </div>
+
+        <div class="detail-actions">
+          <a-button danger @click="removeAsset">
+            <template #icon><Trash2 :size="15" /></template>
+            删除
+          </a-button>
+          <a-button type="primary" :loading="saving" :disabled="!dirty" @click="saveDetail">
+            <template #icon><Save :size="15" /></template>
+            保存
+          </a-button>
+        </div>
+      </aside>
+    </div>
+
+    <!-- 新建 / 重命名文件夹 -->
+    <a-modal
+      v-model:open="folderDialog.visible"
+      :title="folderDialog.mode === 'create' ? '新建文件夹' : '重命名文件夹'"
+      :ok-text="folderDialog.mode === 'create' ? '新建' : '保存'"
+      cancel-text="取消"
+      centered
+      width="420px"
+      @ok="submitFolderDialog"
+    >
+      <div class="folder-dialog">
+        <p class="folder-dialog-tip">
+          <FolderOpen :size="14" />
+          位置：{{ folderDialog.mode === 'create'
+            ? (folderDialog.path ? folderDialog.path : activeLabel + ' / 根目录')
+            : (parentOf(folderDialog.path) || activeLabel + ' / 根目录') }}
+        </p>
+        <a-input
+          v-model:value="folderDialog.name"
+          placeholder="请输入文件夹名称"
+          :maxlength="40"
+          @press-enter="submitFolderDialog"
+        />
       </div>
-    </aside>
+    </a-modal>
   </div>
 </template>
 
@@ -456,86 +770,66 @@ onMounted(async () => {
 .asset-library {
   height: 100%;
   display: flex;
+  flex-direction: column;
   min-height: 0;
+  background: var(--bg-app);
 }
 
-/* 左侧筛选 */
-.asset-side {
-  width: 190px;
+/* 顶部 Tab */
+.asset-tabs {
   flex-shrink: 0;
-  border-right: 1px solid var(--border-color);
-  background: var(--bg-panel);
-  padding: 14px 10px;
-  overflow-y: auto;
-}
-.side-label {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
-  color: var(--text-tertiary);
-  padding: 0 8px 8px;
-}
-.side-label.mt {
-  margin-top: 18px;
-}
-.type-item {
+  height: 56px;
   display: flex;
   align-items: center;
-  gap: 9px;
-  width: 100%;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-panel);
+}
+.tab-group {
+  display: flex;
+  gap: 4px;
+}
+.tab-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   height: 38px;
-  padding: 0 10px;
-  border: none;
+  padding: 0 16px;
+  border: 1px solid transparent;
   background: transparent;
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
   font-size: 14px;
   cursor: pointer;
-  transition: all 0.14s ease;
+  transition: background 0.16s ease, color 0.16s ease, border-color 0.16s ease;
 }
-.type-item:hover {
+.tab-item:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
 }
-.type-item.active {
+.tab-item.active {
   background: var(--bg-active);
   color: var(--brand-color);
+  border-color: var(--brand-color);
   font-weight: 600;
 }
-.type-name {
-  flex: 1;
-  text-align: left;
-}
-.type-count {
-  font-size: 12px;
-  color: var(--text-tertiary);
-}
-.type-item.active .type-count {
-  color: var(--brand-color);
-}
-.w-full {
-  width: 100%;
-}
-
-/* 中间资产区 */
-.asset-main {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-}
-.asset-toolbar {
-  height: 58px;
-  flex-shrink: 0;
-  display: flex;
+.tab-count {
+  min-width: 20px;
+  height: 18px;
+  padding: 0 6px;
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 0 18px;
-  border-bottom: 1px solid var(--border-color);
-  background: var(--bg-panel);
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--bg-sunken);
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+.tab-item.active .tab-count {
+  background: var(--brand-soft);
+  color: var(--brand-color);
 }
 .asset-search {
   display: flex;
@@ -550,19 +844,73 @@ onMounted(async () => {
 }
 .search-ico {
   color: var(--text-tertiary);
+  flex-shrink: 0;
 }
 .search-input {
   flex: 1;
+  min-width: 0;
   border: none;
   background: transparent;
   outline: none;
   color: var(--text-primary);
   font-size: 13px;
 }
+
+/* 工具栏 */
+.asset-toolbar {
+  flex-shrink: 0;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-panel);
+}
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+}
+.crumb:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.crumb.current {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.crumb.drop {
+  border-color: var(--brand-color);
+  background: var(--brand-soft);
+  color: var(--brand-color);
+}
+.crumb-sep {
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
 .toolbar-right {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-shrink: 0;
 }
 .view-switch {
   display: flex;
@@ -582,25 +930,144 @@ onMounted(async () => {
   border-radius: 5px;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: all 0.14s ease;
+  transition: background 0.14s ease, color 0.14s ease;
 }
 .view-btn.active {
   background: var(--bg-panel);
   color: var(--brand-color);
   box-shadow: var(--shadow-sm);
 }
+
+/* 主体 */
+.asset-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+.asset-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
 .asset-scroll {
   flex: 1;
   overflow-y: auto;
   min-height: 0;
   padding: 18px;
-  background: var(--bg-app);
 }
+
+/* 文件夹网格 */
+.folder-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.folder-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
+}
+.folder-card:hover {
+  border-color: var(--brand-color);
+  box-shadow: var(--shadow-card);
+}
+.folder-card.drop {
+  border-color: var(--brand-color);
+  background: var(--brand-soft);
+  box-shadow: 0 0 0 2px var(--brand-soft);
+}
+.folder-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 12px;
+  border: none;
+  background: transparent;
+  color: var(--brand-color);
+  cursor: pointer;
+  text-align: left;
+}
+.folder-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.folder-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.folder-count {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.folder-ops {
+  display: flex;
+  gap: 2px;
+  padding-right: 8px;
+  opacity: 0;
+  transition: opacity 0.14s ease;
+}
+.folder-card:hover .folder-ops {
+  opacity: 1;
+}
+.folder-ops button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+.folder-ops button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.folder-ops button:last-child:hover {
+  color: #ff4d4f;
+}
+
+.section-split {
+  display: flex;
+  align-items: center;
+  margin: 4px 0 14px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.section-split span {
+  padding-right: 12px;
+}
+.section-split::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border-color);
+}
+
+/* 资产空态 */
 .asset-empty {
-  margin: 60px auto;
+  margin: 56px auto;
   text-align: center;
   color: var(--text-secondary);
-  max-width: 420px;
+  max-width: 440px;
 }
 .empty-icon {
   width: 72px;
@@ -621,12 +1088,13 @@ onMounted(async () => {
 .asset-empty p {
   margin: 0;
   font-size: 13px;
+  line-height: 1.6;
 }
 
-/* 网格 */
+/* 资产网格 */
 .asset-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   gap: 14px;
 }
 .grid-item {
@@ -638,7 +1106,7 @@ onMounted(async () => {
   border-radius: var(--radius-md);
   background: var(--bg-panel);
   cursor: pointer;
-  transition: all 0.16s ease;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
 }
 .grid-item:hover {
   border-color: var(--brand-color);
@@ -648,6 +1116,9 @@ onMounted(async () => {
 .grid-item.active {
   border-color: var(--brand-color);
   box-shadow: 0 0 0 2px var(--brand-soft);
+}
+.grid-item.dragging {
+  opacity: 0.5;
 }
 .grid-thumb {
   aspect-ratio: 1;
@@ -672,8 +1143,19 @@ onMounted(async () => {
   white-space: nowrap;
   text-align: center;
 }
+.grid-path {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
-/* 列表 */
+/* 资产列表 */
 .asset-list {
   display: flex;
   flex-direction: column;
@@ -689,7 +1171,7 @@ onMounted(async () => {
   background: var(--bg-panel);
   cursor: pointer;
   text-align: left;
-  transition: all 0.14s ease;
+  transition: border-color 0.14s ease, background 0.14s ease;
 }
 .list-item:hover {
   border-color: var(--brand-color);
@@ -697,6 +1179,9 @@ onMounted(async () => {
 .list-item.active {
   border-color: var(--brand-color);
   background: var(--bg-active);
+}
+.list-item.dragging {
+  opacity: 0.5;
 }
 .list-thumb {
   width: 40px;
@@ -735,7 +1220,7 @@ onMounted(async () => {
 
 /* 右侧详情 */
 .asset-detail {
-  width: 300px;
+  width: 320px;
   flex-shrink: 0;
   border-left: 1px solid var(--border-color);
   background: var(--bg-panel);
@@ -758,10 +1243,6 @@ onMounted(async () => {
   width: 100%;
   max-height: 240px;
   object-fit: contain;
-}
-.preview-audio {
-  width: 100%;
-  padding: 20px 12px;
 }
 .preview-video {
   width: 100%;
@@ -800,7 +1281,7 @@ onMounted(async () => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 170px;
+  max-width: 190px;
 }
 .detail-actions {
   display: flex;
@@ -809,5 +1290,20 @@ onMounted(async () => {
 }
 .detail-actions .ant-btn {
   flex: 1;
+}
+
+/* 文件夹弹窗 */
+.folder-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.folder-dialog-tip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
 }
 </style>

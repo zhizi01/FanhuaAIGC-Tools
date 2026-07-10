@@ -39,6 +39,11 @@ contextBridge.exposeInMainWorld('api', {
     remove: (payload) => ipcRenderer.invoke('assets:remove', payload),
     import: (payload) => ipcRenderer.invoke('assets:import', payload),
     syncGenerated: (projectPath) => ipcRenderer.invoke('assets:syncGenerated', projectPath),
+    folders: (projectPath) => ipcRenderer.invoke('assets:folders', projectPath),
+    createFolder: (payload) => ipcRenderer.invoke('assets:createFolder', payload),
+    renameFolder: (payload) => ipcRenderer.invoke('assets:renameFolder', payload),
+    removeFolder: (payload) => ipcRenderer.invoke('assets:removeFolder', payload),
+    move: (payload) => ipcRenderer.invoke('assets:move', payload),
   },
   // 工程 Flow 幕布
   flow: {

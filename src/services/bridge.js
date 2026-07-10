@@ -70,6 +70,11 @@ function wrapElectronApi(raw) {
       remove: (payload) => raw.assets.remove(toPlain(payload)),
       import: (payload) => raw.assets.import(toPlain(payload)),
       syncGenerated: (projectPath) => raw.assets.syncGenerated(projectPath),
+      folders: (projectPath) => raw.assets.folders(projectPath),
+      createFolder: (payload) => raw.assets.createFolder(toPlain(payload)),
+      renameFolder: (payload) => raw.assets.renameFolder(toPlain(payload)),
+      removeFolder: (payload) => raw.assets.removeFolder(toPlain(payload)),
+      move: (payload) => raw.assets.move(toPlain(payload)),
     },
     flow: {
       read: (projectPath) => raw.flow.read(projectPath),
@@ -128,6 +133,27 @@ const fallbackApi = {
     remove: desktopOnly('删除资产'),
     import: desktopOnly('导入资产'),
     syncGenerated: desktopOnly('同步项目资产'),
+    // 浏览器降级：文件夹注册表存于 localStorage，便于纯前端调试文件管理器交互
+    folders: async (projectPath) => lsGet('qs_asset_folders_' + projectPath, []),
+    createFolder: async ({ projectPath, type, path }) => {
+      const key = 'qs_asset_folders_' + projectPath
+      const folders = lsGet(key, [])
+      const p = String(path || '').trim()
+      if (p && !folders.some((f) => f.type === type && f.path === p)) {
+        folders.push({ path: p, type, createdAt: new Date().toISOString() })
+        lsSet(key, folders)
+      }
+      return folders
+    },
+    renameFolder: async ({ projectPath }) => ({ folders: lsGet('qs_asset_folders_' + projectPath, []), items: [] }),
+    removeFolder: async ({ projectPath, type, path }) => {
+      const key = 'qs_asset_folders_' + projectPath
+      const p = String(path || '').trim()
+      const folders = lsGet(key, []).filter((f) => !(f.type === type && (f.path === p || f.path.startsWith(p + '/'))))
+      lsSet(key, folders)
+      return { folders, items: [] }
+    },
+    move: desktopOnly('移动资产'),
   },
   flow: {
     read: async (projectPath) => lsGet('qs_flow_' + projectPath, null),
