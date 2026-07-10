@@ -27,13 +27,13 @@ import {
   Video,
   ZoomIn,
 } from 'lucide-vue-next'
-import { message } from 'ant-design-vue'
+import { Modal, message } from 'ant-design-vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '../../store/appState.js'
 import { useFlowCanvasStore } from '../../store/flowCanvas.js'
 import { useUsageStore } from '../../store/usage.js'
 import { api } from '../../services/bridge.js'
-import { generateStoryboardShots } from '../../services/ai.js'
+import { generateStoryboardShots, identifyEpisodeRoles } from '../../services/ai.js'
 import { assetUrl } from '../../utils/asset.js'
 
 const appStore = useAppStore()
@@ -55,7 +55,10 @@ const draggingShot = ref(null)
 const brokenCovers = reactive(new Set())
 const scriptDrafts = reactive({})
 const storyboardLoading = reactive({})
+const scriptRoleLoading = reactive({})
 const roleOptions = ref([])
+const imageOptions = ref([])
+const mentionOptions = computed(() => [...roleOptions.value, ...imageOptions.value])
 
 const contextMenu = reactive({
   visible: false,
@@ -96,6 +99,23 @@ const imageDialog = reactive({
   assetId: '',
   flowX: 0,
   flowY: 0,
+})
+
+// AI 分镜预览确认：生成成功后先弹窗核对，确认后再写入画布
+const storyboardPreview = reactive({
+  visible: false,
+  applying: false,
+  layoutId: '',
+  clearOld: false,
+  shots: [],
+})
+
+// 剧情卡 AI 关联角色：识别后先确认，再添加到画布并连线
+const scriptRolePreview = reactive({
+  visible: false,
+  applying: false,
+  scriptNodeId: '',
+  items: [],
 })
 
 const boxSelect = reactive({
@@ -779,6 +799,8 @@ function addStoryboardLayout() {
       title: `分镜排布 ${index}`,
       desc: '绑定一段剧情，接入多个分镜并调整顺序。',
       shotOrder: [],
+      aiGeneratedShotIds: [],
+      lastAiGeneratedAt: '',
     },
   })
 }
@@ -794,6 +816,7 @@ function addShotNode() {
       title: `分镜 ${index}`,
       shotNo: index,
       duration: 0,
+      method: '',
       prompt: '',
       description: '单个分镜镜头，可接入分镜总览。',
       image: '',
@@ -816,11 +839,12 @@ function addMasterOutputNode() {
   })
 }
 
-// 加载全部角色，供分镜提示词的 @ 提及使用
-async function loadRoleOptions() {
+// 加载全部角色与参考图，供分镜提示词的 @ 提及使用
+async function loadMentionSources() {
   const projectPath = project.value?.path
   if (!projectPath) {
     roleOptions.value = []
+    imageOptions.value = []
     return
   }
   try {
@@ -828,6 +852,15 @@ async function loadRoleOptions() {
     roleOptions.value = roles.map((r) => ({ value: r.name, label: r.name })).filter((o) => o.value)
   } catch {
     roleOptions.value = []
+  }
+  try {
+    const assets = await api.assets.list(projectPath)
+    imageOptions.value = assets
+      .filter((a) => a.type === 'image')
+      .map((a) => ({ value: a.name, label: a.name }))
+      .filter((o) => o.value)
+  } catch {
+    imageOptions.value = []
   }
 }
 
@@ -1006,8 +1039,198 @@ async function saveScriptNode(id, data) {
   }
 }
 
+function linkedRoleIdsForScript(scriptNodeId) {
+  return new Set(
+    edges.value
+      .filter((e) => e.target === scriptNodeId && e.targetHandle === 'cast-roles')
+      .map((e) => nodes.value.find((n) => n.id === e.source))
+      .filter((n) => n?.type === 'role-card' && n.data?.roleId)
+      .map((n) => n.data.roleId),
+  )
+}
+
+function findLibraryRole(libraryRoles, name) {
+  const target = String(name || '').trim().toLowerCase()
+  if (!target) return null
+  return (
+    libraryRoles.find((r) => String(r.name || '').trim().toLowerCase() === target) ||
+    libraryRoles.find((r) => {
+      const n = String(r.name || '').trim().toLowerCase()
+      return n && (target.includes(n) || n.includes(target))
+    }) ||
+    null
+  )
+}
+
+function resetScriptRolePreview() {
+  Object.assign(scriptRolePreview, {
+    visible: false,
+    applying: false,
+    scriptNodeId: '',
+    items: [],
+  })
+}
+
+function closeScriptRolePreview() {
+  if (scriptRolePreview.applying) return
+  resetScriptRolePreview()
+}
+
+const scriptRoleSelectedCount = computed(
+  () => scriptRolePreview.items.filter((item) => item.checked && item.roleId && !item.alreadyLinked).length,
+)
+
+// 一键 AI 关联角色：识别本集参与角色 -> 匹配角色库 -> 弹窗确认后挂到画布
+async function associateScriptRoles(scriptNodeId) {
+  const projectPath = project.value?.path
+  if (!projectPath || scriptRoleLoading[scriptNodeId] || scriptRolePreview.visible) return
+  const scriptNode = nodes.value.find((n) => n.id === scriptNodeId)
+  if (!scriptNode) return
+  const content = scriptDraftContent(scriptNodeId, scriptNode.data)
+  if (!content || !String(content).trim()) {
+    return message.warning('该剧情还没有内容，请先补充后再关联角色')
+  }
+  if (!(appStore.settings.models || []).length) {
+    return message.warning('请先在设置页添加模型')
+  }
+
+  scriptRoleLoading[scriptNodeId] = true
+  try {
+    const [{ roles, usage }, libraryRoles] = await Promise.all([
+      identifyEpisodeRoles({
+        episodeTitle: scriptNode.data?.episodeTitle || scriptNode.data?.title || '',
+        episodeContent: String(content).slice(0, 16000),
+        modelId: appStore.currentModelId,
+      }),
+      api.roles.list(projectPath),
+    ])
+    usageStore.add(projectPath, usage)
+    if (!roles.length) return message.warning('AI 未识别到参与角色，请重试')
+
+    const linkedIds = linkedRoleIdsForScript(scriptNodeId)
+    const items = roles.map((role, i) => {
+      const matched = findLibraryRole(libraryRoles, role.name)
+      const alreadyLinked = matched ? linkedIds.has(matched.id) : false
+      return {
+        key: `script_role_${Date.now()}_${i}`,
+        name: role.name,
+        roleType: role.roleType || matched?.roleType || '',
+        note: role.note || '',
+        roleId: matched?.id || '',
+        cover: matched ? roleCover(matched) : '',
+        identity: matched?.identity || '',
+        personality: matched?.personality || '',
+        appearance: matched?.appearance || '',
+        gender: matched?.gender || '',
+        age: matched?.age || '',
+        voice: matched?.voice || '',
+        matched: Boolean(matched),
+        alreadyLinked,
+        checked: Boolean(matched) && !alreadyLinked,
+      }
+    })
+
+    Object.assign(scriptRolePreview, {
+      visible: true,
+      applying: false,
+      scriptNodeId,
+      items,
+    })
+  } catch (err) {
+    message.error('识别角色失败：' + err.message)
+  } finally {
+    scriptRoleLoading[scriptNodeId] = false
+  }
+}
+
+function applyScriptRolePreview() {
+  if (scriptRolePreview.applying) return Promise.reject(new Error('applying'))
+  const scriptNodeId = scriptRolePreview.scriptNodeId
+  const chosen = scriptRolePreview.items.filter((item) => item.checked && item.roleId && !item.alreadyLinked)
+  if (!scriptNodeId) return Promise.reject(new Error('missing script'))
+  if (!chosen.length) {
+    message.warning('请至少勾选一个可关联的角色库角色')
+    return Promise.reject(new Error('empty selection'))
+  }
+
+  scriptRolePreview.applying = true
+  try {
+    const scriptNode = nodes.value.find((n) => n.id === scriptNodeId)
+    if (!scriptNode) throw new Error('剧情节点不存在')
+    const baseX = (scriptNode.position?.x || 0) - 320
+    const baseY = scriptNode.position?.y || 0
+    const stamp = Date.now()
+    const newNodes = []
+    const newEdges = []
+    const linkedIds = linkedRoleIdsForScript(scriptNodeId)
+
+    // 画布上已有同角色卡但未连到本剧情时，直接连线，避免重复卡片
+    const existingByRoleId = new Map(
+      nodes.value
+        .filter((n) => n.type === 'role-card' && n.data?.roleId)
+        .map((n) => [n.data.roleId, n]),
+    )
+
+    chosen.forEach((item, i) => {
+      if (linkedIds.has(item.roleId)) return
+      let roleNode = existingByRoleId.get(item.roleId)
+      if (!roleNode) {
+        const nodeId = `role_card_${stamp}_${i}`
+        roleNode = {
+          id: nodeId,
+          type: 'role-card',
+          position: { x: baseX, y: baseY + i * 240 },
+          class: 'role-card-node',
+          data: {
+            title: item.name || '未命名角色',
+            roleId: item.roleId,
+            roleType: item.roleType || '角色',
+            gender: item.gender || '',
+            age: item.age || '',
+            identity: item.identity || '',
+            personality: item.personality || '',
+            appearance: item.appearance || '',
+            voice: item.voice || '',
+            cover: item.cover || '',
+            desc: item.identity || item.personality || item.appearance || '已绑定角色库角色。',
+          },
+        }
+        newNodes.push(roleNode)
+        existingByRoleId.set(item.roleId, roleNode)
+      }
+      newEdges.push(
+        makeEdge(
+          `edge_${roleNode.id}_role-out_${scriptNodeId}_cast-roles_${stamp}_${i}`,
+          roleNode.id,
+          scriptNodeId,
+          {
+            sourceHandle: 'role-out',
+            targetHandle: 'cast-roles',
+          },
+        ),
+      )
+      linkedIds.add(item.roleId)
+    })
+
+    if (!newNodes.length && !newEdges.length) {
+      message.info('所选角色均已关联到本剧情')
+      resetScriptRolePreview()
+      return
+    }
+
+    nodes.value = [...nodes.value, ...newNodes]
+    edges.value = [...edges.value, ...newEdges]
+    resetScriptRolePreview()
+    message.success(`已关联 ${newEdges.length} 个角色到剧情卡`)
+  } catch (err) {
+    scriptRolePreview.applying = false
+    message.error('关联角色失败：' + err.message)
+    return Promise.reject(err)
+  }
+}
+
 function scriptCardHeight() {
-  return 430
+  return 468
 }
 
 function storyboardLayoutHeight(layoutId, data) {
@@ -1076,10 +1299,77 @@ function generateShotVideo() {
   message.info('视频生成能力开发中（已预留接口）')
 }
 
-// 一键生成分镜镜头：读取该分镜总览所连剧情 -> 调 AI 拆分 -> 生成分镜卡片并建立关联
+// 当前分镜总览已关联的分镜记录（含 AI 生成与手动接入）
+function associatedLayoutShots(layoutId) {
+  const layout = nodes.value.find((n) => n.id === layoutId)
+  return layoutShotItems(layoutId, layout?.data)
+}
+
+function confirmReplaceAssociatedShots(count) {
+  return new Promise((resolve) => {
+    Modal.confirm({
+      title: '已有关联分镜',
+      content: `当前分镜总览已关联 ${count} 个分镜。是否清理旧分镜，并由 AI 重新生成？`,
+      okText: '清理并重新生成',
+      cancelText: '取消',
+      centered: true,
+      onOk: () => resolve(true),
+      onCancel: () => resolve(false),
+    })
+  })
+}
+
+// 清理分镜总览下已关联的分镜节点与连线
+function clearAssociatedLayoutShots(layoutId) {
+  const items = associatedLayoutShots(layoutId)
+  if (!items.length) {
+    setLayoutShotOrder(layoutId, [])
+    return
+  }
+  const idSet = new Set(items.map((item) => item.id))
+  nodes.value = nodes.value.filter((node) => !idSet.has(node.id))
+  edges.value = edges.value.filter(
+    (edge) =>
+      !idSet.has(edge.source) &&
+      !idSet.has(edge.target) &&
+      !(edge.target === layoutId && edge.targetHandle === 'layout-shot-in'),
+  )
+  setLayoutShotOrder(layoutId, [])
+}
+
+function resetStoryboardPreview() {
+  Object.assign(storyboardPreview, {
+    visible: false,
+    applying: false,
+    layoutId: '',
+    clearOld: false,
+    shots: [],
+  })
+}
+
+function closeStoryboardPreview() {
+  if (storyboardPreview.applying) return
+  resetStoryboardPreview()
+}
+
+function movePreviewShot(index, delta) {
+  const next = index + delta
+  const list = storyboardPreview.shots
+  if (next < 0 || next >= list.length) return
+  const copy = [...list]
+  const [item] = copy.splice(index, 1)
+  copy.splice(next, 0, item)
+  storyboardPreview.shots = copy
+}
+
+function removePreviewShot(index) {
+  storyboardPreview.shots = storyboardPreview.shots.filter((_, i) => i !== index)
+}
+
+// 一键生成分镜：先检查关联记录 -> AI 生成 -> 弹窗确认后再写入画布
 async function generateStoryboard(layoutId) {
   const projectPath = project.value?.path
-  if (!projectPath || storyboardLoading[layoutId]) return
+  if (!projectPath || storyboardLoading[layoutId] || storyboardPreview.visible) return
   const scriptEdge = edges.value.find(
     (e) => e.target === layoutId && e.targetHandle === 'layout-script-in',
   )
@@ -1092,6 +1382,15 @@ async function generateStoryboard(layoutId) {
   if (!(appStore.settings.models || []).length) {
     return message.warning('请先在设置页添加模型')
   }
+
+  const existing = associatedLayoutShots(layoutId)
+  let clearOld = false
+  if (existing.length) {
+    const ok = await confirmReplaceAssociatedShots(existing.length)
+    if (!ok) return
+    clearOld = true
+  }
+
   storyboardLoading[layoutId] = true
   try {
     const { shots, usage } = await generateStoryboardShots({
@@ -1101,14 +1400,63 @@ async function generateStoryboard(layoutId) {
     })
     usageStore.add(projectPath, usage)
     if (!shots.length) return message.warning('AI 未生成分镜，请重试')
-    const layout = nodes.value.find((n) => n.id === layoutId)
-    const baseX = (layout?.position?.x || 0) - 320
-    const baseY = layout?.position?.y || 0
+
+    Object.assign(storyboardPreview, {
+      visible: true,
+      applying: false,
+      layoutId,
+      clearOld,
+      shots: shots.map((shot, i) => ({
+        key: `preview_${Date.now()}_${i}`,
+        title: shot.title || `分镜 ${i + 1}`,
+        duration: Number(shot.duration) || 0,
+        method: shot.method || '',
+        prompt: shot.prompt || shot.method || '',
+        description: shot.description || '',
+      })),
+    })
+  } catch (err) {
+    message.error('生成分镜失败：' + err.message)
+  } finally {
+    storyboardLoading[layoutId] = false
+  }
+}
+
+// 用户确认预览后：按需清理旧分镜，再把确认结果写入画布
+function applyStoryboardPreview() {
+  if (storyboardPreview.applying) return Promise.reject(new Error('applying'))
+  const layoutId = storyboardPreview.layoutId
+  const shots = storyboardPreview.shots
+  if (!layoutId) return Promise.reject(new Error('missing layout'))
+  if (!shots.length) {
+    message.warning('请至少保留一个分镜后再确认')
+    return Promise.reject(new Error('empty shots'))
+  }
+
+  storyboardPreview.applying = true
+  try {
+    const layoutBefore = nodes.value.find((n) => n.id === layoutId)
+    const baseX = (layoutBefore?.position?.x || 0) - 320
+    const baseY = layoutBefore?.position?.y || 0
+    const keepOrder = storyboardPreview.clearOld
+      ? []
+      : Array.isArray(layoutBefore?.data?.shotOrder)
+        ? [...layoutBefore.data.shotOrder]
+        : []
+    const keepAiIds = storyboardPreview.clearOld
+      ? []
+      : (Array.isArray(layoutBefore?.data?.aiGeneratedShotIds) ? layoutBefore.data.aiGeneratedShotIds : []).filter(
+          (id) => keepOrder.includes(id),
+        )
+
+    if (storyboardPreview.clearOld) clearAssociatedLayoutShots(layoutId)
+
     const startNo = nodes.value.filter((n) => n.type === 'shot-node').length + 1
     const stamp = Date.now()
     const newNodes = []
     const newEdges = []
     const newIds = []
+
     shots.forEach((shot, i) => {
       const nodeId = `shot_node_${stamp}_${i}`
       newIds.push(nodeId)
@@ -1120,10 +1468,12 @@ async function generateStoryboard(layoutId) {
         data: {
           title: shot.title || `分镜 ${startNo + i}`,
           shotNo: startNo + i,
-          duration: shot.duration || 0,
-          prompt: shot.prompt || '',
+          duration: Number(shot.duration) || 0,
+          method: shot.method || '',
+          prompt: shot.prompt || shot.method || '',
           description: shot.description || '',
           image: '',
+          fromAi: true,
         },
       })
       newEdges.push(
@@ -1133,15 +1483,31 @@ async function generateStoryboard(layoutId) {
         }),
       )
     })
-    nodes.value = [...nodes.value, ...newNodes]
+
+    const nextOrder = [...keepOrder, ...newIds]
+    nodes.value = [
+      ...nodes.value.map((node) => {
+        if (node.id !== layoutId) return node
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            shotOrder: nextOrder,
+            aiGeneratedShotIds: [...keepAiIds, ...newIds],
+            lastAiGeneratedAt: new Date().toISOString(),
+          },
+        }
+      }),
+      ...newNodes,
+    ]
     edges.value = [...edges.value, ...newEdges]
-    const currentOrder = Array.isArray(layout?.data?.shotOrder) ? layout.data.shotOrder : []
-    setLayoutShotOrder(layoutId, [...currentOrder, ...newIds])
-    message.success(`已生成 ${shots.length} 个分镜镜头并接入分镜总览`)
+
+    resetStoryboardPreview()
+    message.success(`已确认并接入 ${shots.length} 个分镜镜头`)
   } catch (err) {
-    message.error('生成分镜失败：' + err.message)
-  } finally {
-    storyboardLoading[layoutId] = false
+    storyboardPreview.applying = false
+    message.error('写入分镜失败：' + err.message)
+    return Promise.reject(err)
   }
 }
 
@@ -1391,7 +1757,7 @@ watch(
     brokenCovers.clear()
     initializeCanvas()
     loadScriptChoices()
-    loadRoleOptions()
+    loadMentionSources()
   },
 )
 
@@ -1409,7 +1775,7 @@ onMounted(() => {
   window.addEventListener('click', closeMenu)
   initializeCanvas()
   loadScriptChoices()
-  loadRoleOptions()
+  loadMentionSources()
 })
 
 onBeforeUnmount(() => {
@@ -1518,6 +1884,17 @@ onBeforeUnmount(() => {
               />
             </div>
 
+            <button
+              class="script-role-gen-btn nodrag"
+              :disabled="scriptRoleLoading[id]"
+              @mousedown.stop
+              @click.stop="associateScriptRoles(id)"
+            >
+              <LoaderCircle v-if="scriptRoleLoading[id]" :size="13" class="sb-spin" />
+              <UserRound v-else :size="13" />
+              {{ scriptRoleLoading[id] ? 'AI 识别角色中…' : '一键 AI 关联角色' }}
+            </button>
+
             <div class="script-port-list script-port-left">
               <div class="script-port-row">出境角色</div>
               <div class="script-port-row">参考图片</div>
@@ -1622,13 +1999,13 @@ onBeforeUnmount(() => {
                 <span>视频未生成</span>
               </div>
             </div>
-            <div class="shot-prompt-label">分镜提示词（输入 @ 提及角色）</div>
+            <div class="shot-prompt-label">分镜提示词（输入 @ 提及角色 / 参考图）</div>
             <div class="shot-prompt-mentions nodrag" @mousedown.stop>
               <a-mentions
                 :value="data.prompt || ''"
-                :options="roleOptions"
+                :options="mentionOptions"
                 :rows="4"
-                placeholder="编写分镜提示词，输入 @ 提及关联角色"
+                placeholder="编写分镜提示词，输入 @ 提及角色或参考图"
                 @change="(val) => updateShotPrompt(id, val)"
               />
             </div>
@@ -1697,7 +2074,9 @@ onBeforeUnmount(() => {
               <Clapperboard :size="17" />
               <input class="node-title-input nodrag" :value="data.title" @input="updateNodeTitle(id, $event.target.value)" />
             </div>
-            <div class="flow-card-kicker">分镜总览 · 拖动调整画面顺序</div>
+            <div class="flow-card-kicker">
+              分镜总览 · 已关联 {{ layoutShotItems(id, data).length }} 个分镜
+            </div>
             <div class="shot-frame-list">
               <div
                 v-for="(shot, idx) in layoutShotItems(id, data)"
@@ -1939,6 +2318,134 @@ onBeforeUnmount(() => {
           <strong>第{{ selectedEpisode.episodeNo }}集：{{ selectedEpisode.title }}</strong>
           <p>{{ extractEpisodeSummary(selectedEpisode.content) }}</p>
         </div>
+      </div>
+    </a-modal>
+
+    <a-modal
+      v-model:open="storyboardPreview.visible"
+      title="确认 AI 分镜结果"
+      :confirm-loading="storyboardPreview.applying"
+      :mask-closable="!storyboardPreview.applying"
+      :keyboard="!storyboardPreview.applying"
+      ok-text="确认并接入画布"
+      cancel-text="取消"
+      width="960px"
+      centered
+      @ok="applyStoryboardPreview"
+      @cancel="closeStoryboardPreview"
+    >
+      <div class="storyboard-preview-dialog">
+        <p class="storyboard-preview-tip">
+          请核对顺序、镜头时间、拍摄方法与发生剧情。确认后才会写入画布
+          <template v-if="storyboardPreview.clearOld">；旧的关联分镜将一并清理</template>
+          。
+        </p>
+        <div class="storyboard-preview-table-wrap">
+          <table class="storyboard-preview-table">
+            <thead>
+              <tr>
+                <th class="col-order">顺序</th>
+                <th class="col-duration">镜头时间</th>
+                <th class="col-method">镜头拍摄方法</th>
+                <th class="col-plot">发生剧情</th>
+                <th class="col-actions">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(shot, index) in storyboardPreview.shots" :key="shot.key">
+                <td class="col-order">
+                  <div class="order-cell">
+                    <strong>{{ index + 1 }}</strong>
+                    <div class="order-btns">
+                      <button type="button" :disabled="index === 0" @click="movePreviewShot(index, -1)">上移</button>
+                      <button
+                        type="button"
+                        :disabled="index === storyboardPreview.shots.length - 1"
+                        @click="movePreviewShot(index, 1)"
+                      >
+                        下移
+                      </button>
+                    </div>
+                  </div>
+                </td>
+                <td class="col-duration">
+                  <a-input-number
+                    v-model:value="shot.duration"
+                    :min="0"
+                    :max="120"
+                    :step="0.5"
+                    addon-after="秒"
+                    style="width: 100%"
+                  />
+                </td>
+                <td class="col-method">
+                  <a-textarea v-model:value="shot.method" :rows="3" placeholder="景别 / 运镜 / 机位" />
+                </td>
+                <td class="col-plot">
+                  <a-input v-model:value="shot.title" placeholder="镜头标题" style="margin-bottom: 6px" />
+                  <a-textarea v-model:value="shot.description" :rows="2" placeholder="本镜头发生的剧情与对白" />
+                </td>
+                <td class="col-actions">
+                  <button type="button" class="preview-remove-btn" @click="removePreviewShot(index)">移除</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <a-empty v-if="!storyboardPreview.shots.length" description="暂无分镜，可取消后重新生成" />
+      </div>
+    </a-modal>
+
+    <a-modal
+      v-model:open="scriptRolePreview.visible"
+      title="确认 AI 关联角色"
+      :confirm-loading="scriptRolePreview.applying"
+      :mask-closable="!scriptRolePreview.applying"
+      :keyboard="!scriptRolePreview.applying"
+      :ok-button-props="{ disabled: scriptRoleSelectedCount === 0 }"
+      :ok-text="`确认关联（${scriptRoleSelectedCount}）`"
+      cancel-text="取消"
+      width="720px"
+      centered
+      @ok="applyScriptRolePreview"
+      @cancel="closeScriptRolePreview"
+    >
+      <div class="script-role-preview-dialog">
+        <p class="script-role-preview-tip">
+          AI 已识别本集参与角色，并尝试匹配角色库。请勾选要关联到画布的角色；未匹配到角色库的无法直接关联。
+        </p>
+        <div class="script-role-preview-list">
+          <label
+            v-for="item in scriptRolePreview.items"
+            :key="item.key"
+            class="script-role-preview-item"
+            :class="{
+              disabled: !item.matched || item.alreadyLinked,
+              matched: item.matched,
+              linked: item.alreadyLinked,
+            }"
+          >
+            <a-checkbox
+              v-model:checked="item.checked"
+              :disabled="!item.matched || item.alreadyLinked"
+            />
+            <div class="script-role-preview-thumb">
+              <img v-if="item.cover" :src="previewUrl(item.cover)" :alt="item.name" />
+              <UserRound v-else :size="22" />
+            </div>
+            <div class="script-role-preview-meta">
+              <div class="script-role-preview-title">
+                <strong>{{ item.name }}</strong>
+                <span v-if="item.roleType" class="role-type-chip">{{ item.roleType }}</span>
+                <span v-if="item.alreadyLinked" class="role-status linked">已关联</span>
+                <span v-else-if="item.matched" class="role-status matched">角色库已匹配</span>
+                <span v-else class="role-status missing">角色库未找到</span>
+              </div>
+              <p>{{ item.note || item.identity || item.personality || '无补充说明' }}</p>
+            </div>
+          </label>
+        </div>
+        <a-empty v-if="!scriptRolePreview.items.length" description="未识别到角色" />
       </div>
     </a-modal>
   </div>
@@ -2309,6 +2816,127 @@ onBeforeUnmount(() => {
   border: 1px solid var(--border-color);
   border-radius: 7px;
   background: var(--bg-sunken);
+}
+.script-role-gen-btn {
+  width: 100%;
+  height: 32px;
+  margin-top: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid rgba(96, 165, 250, 0.45);
+  border-radius: 7px;
+  color: #bfdbfe;
+  background: rgba(37, 99, 235, 0.16);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.script-role-gen-btn:hover:not(:disabled) {
+  color: #eff6ff;
+  background: rgba(37, 99, 235, 0.28);
+}
+.script-role-gen-btn:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+.script-role-preview-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.script-role-preview-tip {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.script-role-preview-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: min(52vh, 480px);
+  overflow: auto;
+}
+.script-role-preview-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-sunken);
+  cursor: pointer;
+}
+.script-role-preview-item.disabled {
+  opacity: 0.72;
+  cursor: default;
+}
+.script-role-preview-item.matched:not(.linked) {
+  border-color: rgba(37, 99, 235, 0.35);
+}
+.script-role-preview-thumb {
+  width: 42px;
+  height: 42px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 8px;
+  color: #bfdbfe;
+  background: rgba(37, 99, 235, 0.18);
+}
+.script-role-preview-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.script-role-preview-meta {
+  min-width: 0;
+  flex: 1;
+}
+.script-role-preview-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.script-role-preview-title strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.role-type-chip,
+.role-status {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 11px;
+}
+.role-type-chip {
+  color: var(--text-secondary);
+  background: rgba(148, 163, 184, 0.16);
+}
+.role-status.matched {
+  color: #93c5fd;
+  background: rgba(37, 99, 235, 0.18);
+}
+.role-status.linked {
+  color: #86efac;
+  background: rgba(34, 197, 94, 0.16);
+}
+.role-status.missing {
+  color: #fbbf24;
+  background: rgba(245, 158, 11, 0.16);
+}
+.script-role-preview-meta p {
+  margin: 4px 0 0;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1.45;
 }
 .preview-head {
   display: flex;
@@ -3187,6 +3815,97 @@ onBeforeUnmount(() => {
 
 .script-dialog :deep(.ant-form-item) {
   margin-bottom: 14px;
+}
+.storyboard-preview-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.storyboard-preview-tip {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.storyboard-preview-table-wrap {
+  max-height: min(58vh, 560px);
+  overflow: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+.storyboard-preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+.storyboard-preview-table th,
+.storyboard-preview-table td {
+  padding: 10px;
+  border-bottom: 1px solid var(--border-color);
+  vertical-align: top;
+  text-align: left;
+}
+.storyboard-preview-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-elevated, var(--bg-panel, #141a22));
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+.storyboard-preview-table .col-order {
+  width: 88px;
+}
+.storyboard-preview-table .col-duration {
+  width: 120px;
+}
+.storyboard-preview-table .col-actions {
+  width: 72px;
+}
+.order-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+.order-cell strong {
+  font-size: 14px;
+}
+.order-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.order-btns button,
+.preview-remove-btn {
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.order-btns button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.order-btns button:not(:disabled):hover,
+.preview-remove-btn:hover {
+  color: var(--brand-color);
+  border-color: var(--brand-color);
+}
+.preview-remove-btn {
+  color: #ef4444;
+}
+.preview-remove-btn:hover {
+  color: #fecaca;
+  border-color: #ef4444;
+}
+.storyboard-preview-table :deep(.ant-input),
+.storyboard-preview-table :deep(textarea.ant-input) {
+  font-size: 12px;
 }
 .current-script-box {
   height: 34px;
