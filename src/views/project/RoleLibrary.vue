@@ -17,7 +17,7 @@ const route = useRoute()
 const router = useRouter()
 const project = computed(() => appStore.currentProject)
 
-const ROLE_TYPES = ['主角', '配角', '反派', '路人', '旁白']
+const ROLE_TYPES = ['主角', '配角', '反派', '路人']
 
 const roles = ref([])
 const loading = ref(false)

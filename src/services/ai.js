@@ -3,6 +3,7 @@
 import axios from 'axios'
 import { useAppStore } from '../store/appState.js'
 import { stripCodeFence } from '../utils/markdown.js'
+import { sanitizeRoleCandidates } from '../utils/roles.js'
 
 // 根据传入 id / 当前选择 / 默认标记解析出要使用的模型
 export function resolveModel(preferredId) {
@@ -99,7 +100,8 @@ const FORMAT_SPEC = `输出格式要求（必须严格遵守）：
 （依此类推）
 3. 分集标题必须使用“## 第N集：标题”格式，N 为阿拉伯数字，从 1 连续递增。
 4. 不要输出“合规检测”“整理说明”或任何未在上面列出的小节。
-5. 每一集至少包含：时长、本集梗概、开场钩子、结尾悬念，以及至少一个场景（含画面提示、角色动作、旁白、对白）。`
+5. 每一集至少包含：时长、本集梗概、开场钩子、结尾悬念，以及至少一个场景（含画面提示、角色动作、旁白、对白）。
+6. “## 主要角色”只列真实人物；旁白、画外音、解说、内心独白、心声、OS 不是角色，“角色名（内心）”必须归并到本人。`
 
 // 检测剧本 Markdown 是否符合约束
 export function validateScriptMarkdown(md) {
@@ -247,12 +249,14 @@ const EXTRACT_ROLES_SYSTEM = `你是一个专业的漫剧角色设定助手。�
 5. 说话方式描述语言习惯、语速、句式、情绪表达方式。
 6. 声线要写成供配音/视频模型使用的声音描述，例如音色、年龄感、语速、气息、情绪质感。
 7. 剧本没有明说但能合理推断的信息可以补全，但不要杜撰剧本中完全不存在的主要角色。
+8. 旁白、画外音、解说、内心独白、心声、OS 都是叙事/台词形式，不是独立角色，禁止为它们创建角色卡。
+9. “角色名（内心）”“角色名-独白”“角色名OS”等称呼必须合并到该角色本人，不能另建角色。
 
 输出格式要求（必须严格遵守）：
 1. 只返回 Markdown，不要额外解释，不要用代码块围栏包裹。
 2. 每个角色使用“## 角色：角色名”作为标题。
 3. 每个角色下用无序列表给出以下字段（没有的可留空）：
-- 角色定位：主角/配角/反派/路人/旁白
+- 角色定位：主角/配角/反派/路人
 - 性别：
 - 年龄：
 - 身份：
@@ -281,7 +285,7 @@ export async function adjustRoleCard({ role, scriptText, instruction, modelId, s
 
 格式（严格遵守，只返回该角色）：
 ## 角色：${role?.name || '角色'}
-- 角色定位：主角/配角/反派/路人/旁白
+- 角色定位：主角/配角/反派/路人
 - 性别：
 - 年龄：
 - 身份：
@@ -342,37 +346,32 @@ function parseIdentifiedRolesJson(text) {
     throw new Error('AI 返回的角色名单无法解析，请重试或更换模型')
   }
   if (!Array.isArray(arr)) throw new Error('AI 返回的角色名单格式不正确')
-  const seen = new Set()
-  return arr
-    .map((item, i) => {
+  const roles = arr
+    .map((item) => {
       if (typeof item === 'string') {
         return { name: item.trim(), roleType: '', note: '' }
       }
       return {
-        name: String(item?.name ?? item?.角色 ?? item?.角色名 ?? `角色${i + 1}`).trim(),
+        name: String(item?.name ?? item?.角色 ?? item?.角色名 ?? '').trim(),
         roleType: String(item?.roleType ?? item?.type ?? item?.定位 ?? item?.角色定位 ?? '').trim(),
         note: String(item?.note ?? item?.reason ?? item?.evidence ?? item?.说明 ?? '').trim(),
       }
     })
     .filter((r) => r.name)
-    .filter((r) => {
-      const key = r.name.toLowerCase()
-      if (seen.has(key)) return false
-      seen.add(key)
-      return true
-    })
+  return sanitizeRoleCandidates(roles)
 }
 
 const IDENTIFY_ROLES_SYSTEM = `你是漫剧剧本分析助手。请从用户提供的单集剧情中识别「实际参与本集」的角色名单。
 
 要求：
 1. 只列出本集正文中确实出场、有动作/对白/明确提及的角色，不要杜撰。
-2. 旁白若作为独立角色出现可列入，否则不要。
-3. 每个角色包含：
+2. 旁白、画外音、解说、内心独白、心声、OS 都不是独立角色，任何情况下都不要列入名单。
+3. “角色名（内心）”“角色名-独白”“角色名OS”等内容归属于该角色本人，只返回规范角色名。
+4. 每个角色包含：
    - name：角色名（与剧本称呼一致）
-   - roleType：主角/配角/反派/路人/旁白（可空）
+   - roleType：主角/配角/反派/路人（可空）
    - note：一句简短依据（如「开场对白」「天台对峙」）
-4. 只返回 JSON 数组，不要解释，不要代码块围栏。
+5. 只返回 JSON 数组，不要解释，不要代码块围栏。
 
 输出示例：
 [

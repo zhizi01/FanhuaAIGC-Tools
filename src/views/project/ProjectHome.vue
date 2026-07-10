@@ -37,15 +37,23 @@ import { useAppStore } from '../../store/appState.js'
 import { useFlowCanvasStore } from '../../store/flowCanvas.js'
 import { useCanvasTaskStore } from '../../store/canvasTasks.js'
 import { useApprovalStore } from '../../store/approvals.js'
+import { useRoleTaskStore } from '../../store/roleTasks.js'
 import { api } from '../../services/bridge.js'
 import { resolveModel } from '../../services/ai.js'
 import { assetFileUrl, localFileUrl } from '../../utils/asset.js'
 import { markerEnd, makeEdge } from '../../utils/flow.js'
+import {
+  buildRoleCardData,
+  findUniqueLibraryRole,
+  isCharacterRoleCandidate,
+  roleCardRoleId,
+} from '../../utils/roles.js'
 
 const appStore = useAppStore()
 const flowStore = useFlowCanvasStore()
 const canvasTasks = useCanvasTaskStore()
 const approvals = useApprovalStore()
+const roleTasks = useRoleTaskStore()
 const router = useRouter()
 const project = computed(() => appStore.currentProject || {})
 
@@ -132,7 +140,11 @@ const zoomPercent = computed(() => `${Math.round(viewport.zoom * 100)}%`)
 const dirty = computed(() => flowStore.projectPath === project.value?.path && flowStore.dirty)
 // 画布卡片可跳转到对应资源库进行编辑
 const NODE_EDIT_TARGETS = {
-  'role-card': { label: '角色', path: '/project/roles', buildQuery: (d) => ({ roleId: d.roleId }) },
+  'role-card': {
+    label: '角色',
+    path: '/project/roles',
+    buildQuery: (d) => ({ roleId: roleCardRoleId(d) }),
+  },
   'image-card': { label: '图片', path: '/project/assets', buildQuery: (d) => ({ assetId: d.assetId }) },
   'script-work': {
     label: '剧情',
@@ -265,12 +277,28 @@ async function commitNodesSilently(nextNodes) {
 async function refreshRoleCards() {
   const projectPath = project.value?.path
   if (!projectPath) return
-  const roleIds = [
-    ...new Set(
-      nodes.value.filter((n) => n.type === 'role-card' && n.data?.roleId).map((n) => n.data.roleId),
-    ),
-  ]
-  if (!roleIds.length) return
+  const roleNodes = nodes.value.filter((node) => node.type === 'role-card')
+  if (!roleNodes.length) return
+
+  let libraryRoles
+  try {
+    libraryRoles = await api.roles.list(projectPath)
+  } catch {
+    return
+  }
+  const matchableLibraryRoles = libraryRoles.filter(isCharacterRoleCandidate)
+
+  // 兼容旧画布：缺失关联 ID 的角色卡，仅在角色名唯一精确匹配时自动补链。
+  const bindingByNodeId = new Map()
+  for (const node of roleNodes) {
+    const linkedId = roleCardRoleId(node.data)
+    const matched = linkedId
+      ? null
+      : findUniqueLibraryRole(matchableLibraryRoles, node.data?.name || node.data?.title)
+    bindingByNodeId.set(node.id, linkedId || matched?.id || '')
+  }
+  const roleIds = [...new Set([...bindingByNodeId.values()].filter(Boolean))]
+
   const entries = await Promise.all(
     roleIds.map(async (id) => {
       try {
@@ -283,30 +311,34 @@ async function refreshRoleCards() {
   const roleMap = new Map(entries)
   let changed = false
   const nextNodes = nodes.value.map((node) => {
-    if (node.type !== 'role-card' || !node.data?.roleId) return node
-    const role = roleMap.get(node.data.roleId)
-    if (!role) {
-      if (node.data.missing) return node
+    if (node.type !== 'role-card') return node
+    if (!bindingByNodeId.has(node.id)) return node
+    const roleId = bindingByNodeId.get(node.id) || roleCardRoleId(node.data)
+    if (!roleId) {
+      if (node.data?.unlinked && !node.data?.missing) return node
       changed = true
-      return { ...node, data: { ...node.data, missing: true } }
+      return { ...node, data: { ...node.data, missing: false, unlinked: true } }
     }
-    const cover = roleCover(role)
+
+    const role = roleMap.get(roleId)
+    if (!role) {
+      if (node.data.missing && roleCardRoleId(node.data) === roleId) return node
+      changed = true
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          roleId,
+          libraryRoleId: roleId,
+          roleRef: { type: 'role-library', id: roleId },
+          missing: true,
+          unlinked: false,
+        },
+      }
+    }
+    const nextData = buildRoleCardData(role, node.data)
+    const cover = nextData.cover
     if (cover !== node.data.cover) brokenCovers.delete(node.id)
-    const nextData = {
-      ...node.data,
-      missing: false,
-      title: role.name || '未命名角色',
-      roleType: role.roleType || '角色',
-      gender: role.gender || '',
-      age: role.age || '',
-      identity: role.identity || '',
-      personality: role.personality || '',
-      motivation: role.motivation || '',
-      appearance: role.appearance || '',
-      voice: role.voice || '',
-      cover,
-      desc: role.identity || role.personality || role.appearance || '已绑定角色库角色。',
-    }
     if (JSON.stringify(nextData) === JSON.stringify(node.data)) return node
     changed = true
     return { ...node, data: nextData }
@@ -624,10 +656,6 @@ function markCoverBroken(id) {
   brokenCovers.add(id)
 }
 
-function roleCover(role) {
-  return role?.cover || role?.images?.[0] || ''
-}
-
 function roleTags(data) {
   return [data.gender, data.age].filter(Boolean)
 }
@@ -649,7 +677,7 @@ async function loadRoleChoices() {
   if (!project.value?.path) return
   roleDialog.loading = true
   try {
-    roleDialog.roles = await api.roles.list(project.value.path)
+    roleDialog.roles = (await api.roles.list(project.value.path)).filter(isCharacterRoleCandidate)
     roleDialog.roleId = roleDialog.roles[0]?.id || ''
   } catch (err) {
     message.error('加载角色失败：' + err.message)
@@ -674,25 +702,12 @@ async function confirmRoleCard() {
   roleDialog.loading = true
   try {
     const role = await api.roles.read({ projectPath: project.value.path, roleId: roleDialog.roleId })
-    const cover = roleCover(role)
     addNode({
       id: `role_card_${Date.now()}`,
       type: 'role-card',
       position: nodePosition(280, roleDialog.flowX, roleDialog.flowY),
       class: 'role-card-node',
-      data: {
-        title: role.name || '未命名角色',
-        roleId: role.id,
-        roleType: role.roleType || '角色',
-        gender: role.gender || '',
-        age: role.age || '',
-        identity: role.identity || '',
-        personality: role.personality || '',
-        appearance: role.appearance || '',
-        voice: role.voice || '',
-        cover,
-        desc: role.identity || role.personality || role.appearance || '已绑定角色库角色。',
-      },
+      data: buildRoleCardData(role),
     })
     roleDialog.visible = false
   } catch (err) {
@@ -972,7 +987,7 @@ async function loadMentionSources() {
     return
   }
   try {
-    const roles = await api.roles.list(projectPath)
+    const roles = (await api.roles.list(projectPath)).filter(isCharacterRoleCandidate)
     roleOptions.value = roles.map((r) => ({ value: r.name, label: r.name })).filter((o) => o.value)
   } catch {
     roleOptions.value = []
@@ -1577,7 +1592,21 @@ watch(
 // 后台任务写入画布时 flowStore.rev 自增；工程页在场时据此把本地渲染同步到最新
 watch(
   () => flowStore.rev,
-  () => syncLocalFromStore(),
+  async () => {
+    syncLocalFromStore()
+    await nextTick()
+    await refreshRoleCards()
+  },
+)
+
+// 角色 AI 调整可能在工程页打开后才完成，完成时立即重新读取角色库快照。
+watch(
+  () => roleTasks.version,
+  async () => {
+    if (roleTasks.status !== 'done' || roleTasks.kind !== 'adjust') return
+    await refreshRoleCards()
+    await loadMentionSources()
+  },
 )
 
 let resizeObserver = null
@@ -1748,7 +1777,7 @@ onBeforeUnmount(() => {
         </template>
 
         <template #node-role-card="{ id, data, selected }">
-          <div class="role-node" :class="{ selected, 'is-missing': data.missing }">
+          <div class="role-node" :class="{ selected, 'is-missing': data.missing || data.unlinked }">
             <Handle id="role-out" type="source" :position="Position.Right" class="card-handle role-out" />
             <div class="role-node-top">
               <div class="role-node-avatar">
@@ -1766,15 +1795,16 @@ onBeforeUnmount(() => {
               </div>
               <span class="role-node-badge">{{ data.roleType || '角色' }}</span>
             </div>
-            <p class="role-node-desc">{{ data.personality || data.appearance || '未填写角色描述' }}</p>
+            <p class="role-node-desc">{{ data.personality || data.motivation || data.appearance || '未填写角色描述' }}</p>
             <div class="role-node-foot">
               <div class="role-node-tags">
                 <span v-for="tag in roleTags(data)" :key="tag">{{ tag }}</span>
                 <span v-if="!roleTags(data).length" class="role-node-tag-empty">未填写性别 / 年龄</span>
               </div>
-              <span v-if="data.voice" class="role-node-voice" title="已设置声线">声线</span>
+              <span v-if="data.voice || data.voiceLine" class="role-node-voice" title="已设置声线">声线</span>
             </div>
             <div v-if="data.missing" class="role-node-flag">该角色已在角色库中删除</div>
+            <div v-else-if="data.unlinked" class="role-node-flag">未关联角色库，请重新添加角色卡</div>
           </div>
         </template>
 

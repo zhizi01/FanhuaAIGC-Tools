@@ -3,6 +3,7 @@
 import { defineStore } from 'pinia'
 import { api } from '../services/bridge.js'
 import { makeEdge, gridBaseX, gridPosition } from '../utils/flow.js'
+import { buildRoleCardData, roleCardRoleId } from '../utils/roles.js'
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value))
@@ -169,11 +170,13 @@ export const useFlowCanvasStore = defineStore('flowCanvas', {
         this.edges
           .filter((e) => e.target === scriptNodeId && e.targetHandle === 'cast-roles')
           .map((e) => this.nodes.find((n) => n.id === e.source))
-          .filter((n) => n?.type === 'role-card' && n.data?.roleId)
-          .map((n) => n.data.roleId),
+          .filter((n) => n?.type === 'role-card' && roleCardRoleId(n.data))
+          .map((n) => roleCardRoleId(n.data)),
       )
       const existingByRoleId = new Map(
-        this.nodes.filter((n) => n.type === 'role-card' && n.data?.roleId).map((n) => [n.data.roleId, n]),
+        this.nodes
+          .filter((n) => n.type === 'role-card' && roleCardRoleId(n.data))
+          .map((n) => [roleCardRoleId(n.data), n]),
       )
       const toPlace = items.filter((it) => !linkedIds.has(it.roleId) && !existingByRoleId.has(it.roleId)).length
       const baseX = gridBaseX(scriptNode.position?.x || 0, toPlace, 280, 330)
@@ -192,19 +195,7 @@ export const useFlowCanvasStore = defineStore('flowCanvas', {
             type: 'role-card',
             position: gridPosition(baseX, baseY, placed++, 330, 280),
             class: 'role-card-node',
-            data: {
-              title: it.name || '未命名角色',
-              roleId: it.roleId,
-              roleType: it.roleType || '角色',
-              gender: it.gender || '',
-              age: it.age || '',
-              identity: it.identity || '',
-              personality: it.personality || '',
-              appearance: it.appearance || '',
-              voice: it.voice || '',
-              cover: it.cover || '',
-              desc: it.identity || it.personality || it.appearance || '已绑定角色库角色。',
-            },
+            data: buildRoleCardData({ ...it, id: it.roleId }),
           }
           newNodes.push(roleNode)
           existingByRoleId.set(it.roleId, roleNode)

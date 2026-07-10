@@ -7,44 +7,8 @@ import { useAppStore } from './appState.js'
 import { useUsageStore } from './usage.js'
 import { useFlowCanvasStore } from './flowCanvas.js'
 import { useApprovalStore } from './approvals.js'
+import { findLibraryRole, isCharacterRoleCandidate } from '../utils/roles.js'
 
-// 归一化角色名，抹平括注/标点/空白差异
-function normalizeName(name) {
-  return String(name || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[（(【[].*?[)）】\]]/g, '')
-    .replace(/[\s·,，.。、:：;；'"“”‘’!！?？~()（）[\]【】-]/g, '')
-}
-function stripAffix(name) {
-  return name
-    .replace(/^(小|老|阿|大)/, '')
-    .replace(/(总|哥|姐|叔|爷|姨|婶|妈|爸|先生|女士|小姐|老师|同学|队长|将军|陛下)$/, '')
-}
-function findLibraryRole(libraryRoles, name) {
-  const target = normalizeName(name)
-  if (!target) return null
-  const list = libraryRoles.map((r) => ({ role: r, key: normalizeName(r.name) })).filter((x) => x.key)
-  const exact = list.find((x) => x.key === target)
-  if (exact) return exact.role
-  const contain = list.find((x) => {
-    const short = x.key.length <= target.length ? x.key : target
-    return short.length >= 2 && (x.key.includes(target) || target.includes(x.key))
-  })
-  if (contain) return contain.role
-  const t2 = stripAffix(target)
-  if (t2 && t2 !== target) {
-    const affix = list.find((x) => {
-      const k2 = stripAffix(x.key)
-      if (!k2) return false
-      if (k2 === t2) return true
-      const short = k2.length <= t2.length ? k2 : t2
-      return short.length >= 2 && (k2.includes(t2) || t2.includes(k2))
-    })
-    if (affix) return affix.role
-  }
-  return null
-}
 function roleCover(role) {
   return role?.cover || role?.images?.[0] || ''
 }
@@ -126,10 +90,11 @@ export const useCanvasTaskStore = defineStore('canvasTask', {
         await useUsageStore().add(projectPath, usage)
         if (!roles.length) throw new Error('AI 未识别到参与角色，请重试')
         // 识别 + 匹配（含未匹配项），交给审批队列由用户勾选确认
+        const matchableLibraryRoles = libraryRoles.filter(isCharacterRoleCandidate)
         const items = []
         for (let i = 0; i < roles.length; i++) {
           const role = roles[i]
-          const summary = findLibraryRole(libraryRoles, role.name)
+          const summary = findLibraryRole(matchableLibraryRoles, role.name)
           let full = null
           if (summary) {
             try {
@@ -141,8 +106,9 @@ export const useCanvasTaskStore = defineStore('canvasTask', {
           const src = full || summary || {}
           items.push({
             key: `role_${Date.now()}_${i}`,
-            name: role.name,
-            roleType: role.roleType || src.roleType || '',
+            name: src.name || role.name,
+            detectedName: role.name,
+            roleType: src.roleType || role.roleType || '',
             note: role.note || '',
             roleId: summary?.id || '',
             matched: Boolean(summary),
@@ -153,6 +119,11 @@ export const useCanvasTaskStore = defineStore('canvasTask', {
             gender: src.gender || '',
             age: src.age || '',
             voice: src.voice || '',
+            motivation: src.motivation || '',
+            voiceLine: src.voiceLine || '',
+            images: Array.isArray(src.images) ? [...src.images] : [],
+            createdAt: src.createdAt || '',
+            updatedAt: src.updatedAt || '',
           })
         }
         useApprovalStore().enqueue({

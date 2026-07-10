@@ -1,5 +1,6 @@
 // 剧本 Markdown 工具：渲染预览、按集拆分、合规检测解析
 import { marked } from 'marked'
+import { sanitizeRoleCandidates } from './roles.js'
 
 marked.setOptions({ gfm: true, breaks: true })
 
@@ -169,7 +170,7 @@ export function parseExtractedRoles(md) {
     }
   }
   if (cur) roles.push(cur)
-  return roles
+  return sanitizeRoleCandidates(roles)
 }
 
 // 从整套 Markdown 构建可保存的剧本对象

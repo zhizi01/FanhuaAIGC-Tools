@@ -6,6 +6,7 @@ import { ClipboardCheck, UserRound } from 'lucide-vue-next'
 import { useApprovalStore } from '../store/approvals.js'
 import { useFlowCanvasStore } from '../store/flowCanvas.js'
 import { assetFileUrl } from '../utils/asset.js'
+import { roleCardRoleId } from '../utils/roles.js'
 
 const approval = useApprovalStore()
 const flowStore = useFlowCanvasStore()
@@ -21,8 +22,8 @@ function linkedRoleIds(scriptNodeId) {
     flowStore.edges
       .filter((e) => e.target === scriptNodeId && e.targetHandle === 'cast-roles')
       .map((e) => flowStore.nodes.find((n) => n.id === e.source))
-      .filter((n) => n?.type === 'role-card' && n.data?.roleId)
-      .map((n) => n.data.roleId),
+      .filter((n) => n?.type === 'role-card' && roleCardRoleId(n.data))
+      .map((n) => roleCardRoleId(n.data)),
   )
 }
 
