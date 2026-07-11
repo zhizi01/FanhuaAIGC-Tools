@@ -4,6 +4,7 @@ import axios from 'axios'
 import { useAppStore } from '../store/appState.js'
 import { stripCodeFence } from '../utils/markdown.js'
 import { sanitizeRoleCandidates } from '../utils/roles.js'
+import { parseRoleImagePromptSet } from '../utils/roleImagePrompt.js'
 
 // 根据传入 id / 当前选择 / 默认标记解析出要使用的模型
 export function resolveModel(preferredId) {
@@ -268,6 +269,68 @@ const EXTRACT_ROLES_SYSTEM = `你是一个专业的漫剧角色设定助手。�
 - 出现集数：用逗号分隔的阿拉伯数字，如 1, 2, 3
 4. 如果角色之间存在关系，追加“### 角色关系”小节，列出“- 对方角色：关系描述”。
 5. 只提取剧本中确实出现的角色，不要杜撰。`
+
+const ROLE_IMAGE_PROMPT_SYSTEM = `你是专业的角色参考图提示词设计师。请一次生成三条可直接用于 Seedream 图片模型的中文提示词，三张图必须使用同一人物身份、同一发型和同一套服装。
+
+根据用户选择的风格调整材质、线条、上色、灯光和渲染。真人风格使用商业棚拍摄影语言；二次元、CG、国漫等风格必须替换冲突的“真实摄影、真实皮肤”等词，但保持下列构图和内容要求：
+
+一、sheet（主参考图）
+- 16:9 横向画布，纯白色无缝背景。
+- 所有视图是同一个人，五官、脸型、发型、身材比例和服装完全一致。
+- 左侧三张全身视图：正面、左侧面、背面，完整展示头部到鞋子。
+- 右侧六张半身近景：正面微笑、左前方四分之三角度、标准侧面、背面、正面温柔表情、正面自然严肃表情。
+- 排列整齐、间距均匀，专业模特资料卡和角色设定表构图。
+
+二、portrait（标准肖像图）
+- 3:4 竖向画幅，纯白色无缝背景，画面中只有一人。
+- 严格保持主参考图的脸型、五官比例、眼型、鼻型、嘴唇、发际线、发型、气质和服装。
+- 正面面对镜头，身体略微前倾，双肩放松，露出头部、肩膀、胸部和部分手臂。
+- 直视镜头，温柔自然的轻微微笑；人物居中，视线齐平，头顶少量留白。
+- 真人风格采用 85mm 人像镜头、轻微浅景深、柔光箱正面补光；其他风格转换为对应的专业肖像表现。
+
+三、expressions（表情参考图）
+- 横向画布，纯白色无缝背景，整齐的 3×3 九宫格。
+- 九格全部是同一个人；脸型、五官、肤色、发型、服装、构图、机位、头部大小和灯光一致，只改变表情。
+- 第一排：自然中性、温柔闭嘴微笑、开心露齿笑。
+- 第二排：惊讶、疑惑、轻微生气。
+- 第三排：难过、担心紧张、害羞微笑。
+- 表情通过眉毛、眼睛、眼睑、嘴角和嘴唇自然呈现，不使用夸张漫画式变形。
+
+三条提示词都必须包含准确人体比例、高清细节、无文字、无标签、无边框、无水印、无装饰元素、无其他人物。不得擅自改变用户提供的人物核心特征。
+
+只返回以下 JSON 对象，不要解释、标题或 Markdown：
+{"sheet":"主参考图完整提示词","portrait":"标准肖像图完整提示词","expressions":"表情参考图完整提示词"}`
+
+// 根据角色与风格，一次生成主参考图、标准肖像图、表情参考图三组提示词。
+export async function generateRoleImagePrompts({
+  role,
+  appearancePrompt,
+  styleDescription,
+  referenceCount = 0,
+  modelId,
+  signal,
+}) {
+  const appearance = String(appearancePrompt || '').trim()
+  if (!appearance) throw new Error('请先填写人物形象要求')
+  const user = `角色资料：
+姓名：${role?.name || ''}
+角色定位：${role?.roleType || ''}
+人物形象要求：${appearance}
+
+用户输入的生成风格：${styleDescription || '专业角色设定图风格'}
+参考图数量：${Number(referenceCount) || 0} 张${referenceCount ? '，提示词中应强调保持参考图人物身份与服装一致' : ''}
+
+请按照系统规定分别生成主参考图、标准肖像图、表情参考图三条完整提示词。三条提示词的人物细节必须完全一致。`
+  const { content, usage } = await chatComplete({
+    modelId,
+    system: ROLE_IMAGE_PROMPT_SYSTEM,
+    user,
+    temperature: 0.35,
+    signal,
+  })
+  const prompts = parseRoleImagePromptSet(stripCodeFence(content))
+  return { prompts, usage }
+}
 
 // AI 调整角色卡：根据已知信息与剧本，重新整理并强化角色关键设定（返回 { markdown, usage }）
 export async function adjustRoleCard({ role, scriptText, instruction, modelId, signal }) {

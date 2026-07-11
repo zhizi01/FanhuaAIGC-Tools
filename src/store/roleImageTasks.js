@@ -7,6 +7,10 @@ function taskId() {
   return `role_image_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 }
 
+function batchId() {
+  return `role_batch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+}
+
 export const useRoleImageTaskStore = defineStore('roleImageTask', {
   state: () => ({
     queue: [],
@@ -17,6 +21,7 @@ export const useRoleImageTaskStore = defineStore('roleImageTask', {
     failedCount: 0,
     lastError: '',
     lastEvent: null,
+    batchPrimaryFiles: {},
     version: 0,
   }),
   getters: {
@@ -65,6 +70,50 @@ export const useRoleImageTaskStore = defineStore('roleImageTask', {
       return { ok: true, taskId: task.id, position: this.pendingCount }
     },
 
+    enqueueBatch(payload) {
+      const roleId = String(payload?.roleId || '').trim()
+      const items = Array.isArray(payload?.items) ? payload.items : []
+      if (!payload?.projectPath || !roleId || !items.length) {
+        return { ok: false, reason: '角色图片批量任务参数不完整' }
+      }
+      if (items.some((item) => !String(item?.prompt || '').trim())) {
+        return { ok: false, reason: '三张角色图片的提示词必须完整' }
+      }
+      if (this.hasRole(roleId)) {
+        return { ok: false, reason: '该角色已有图片生成任务，请等待完成' }
+      }
+
+      const startsNewBatch = !this.processing && this.queue.length === 0
+      if (startsNewBatch) {
+        this.completedCount = 0
+        this.failedCount = 0
+        this.lastError = ''
+        this.lastEvent = null
+      }
+      const groupId = batchId()
+      const createdAt = new Date().toISOString()
+      const tasks = items.map((item) => ({
+        id: taskId(),
+        batchId: groupId,
+        variant: item.variant || '',
+        variantLabel: item.variantLabel || '角色形象图',
+        usePrimaryReference: Boolean(item.usePrimaryReference),
+        projectPath: payload.projectPath,
+        projectName: payload.projectName || '',
+        roleId,
+        roleName: `${payload.roleName || '未命名角色'} · ${item.variantLabel || '角色形象图'}`,
+        prompt: String(item.prompt).trim(),
+        referenceImages: Array.isArray(payload.referenceImages)
+          ? [...payload.referenceImages]
+          : [],
+        createdAt,
+      }))
+      this.queue.push(...tasks)
+      this.status = 'running'
+      void this._drain()
+      return { ok: true, batchId: groupId, count: tasks.length }
+    },
+
     async _drain() {
       if (this.processing) return
       this.processing = true
@@ -73,13 +122,29 @@ export const useRoleImageTaskStore = defineStore('roleImageTask', {
         const task = this.queue.shift()
         this.activeTask = task
         try {
+          let references = task.referenceImages
+          if (task.usePrimaryReference) {
+            const primaryFile = this.batchPrimaryFiles[task.batchId]
+            if (!primaryFile) throw new Error('主参考图生成失败，无法继续生成关联形象图')
+            references = [
+              primaryFile,
+              ...references.filter((file) => file !== primaryFile),
+            ].slice(0, 10)
+          }
           const result = await api.roles.generateImage({
             projectPath: task.projectPath,
             roleId: task.roleId,
             prompt: task.prompt,
-            referenceImages: task.referenceImages,
+            referenceImages: references,
+            variant: task.variant,
           })
           await useUsageStore().add(task.projectPath, result?.usage)
+          if (task.batchId && task.variant === 'sheet' && result?.file) {
+            this.batchPrimaryFiles = {
+              ...this.batchPrimaryFiles,
+              [task.batchId]: result.file,
+            }
+          }
           this.completedCount += 1
           this.lastEvent = { ...task, status: 'done', result }
         } catch (err) {
@@ -89,6 +154,11 @@ export const useRoleImageTaskStore = defineStore('roleImageTask', {
           this.lastEvent = { ...task, status: 'error', error }
         } finally {
           this.activeTask = null
+          if (task.batchId && !this.queue.some((item) => item.batchId === task.batchId)) {
+            const next = { ...this.batchPrimaryFiles }
+            delete next[task.batchId]
+            this.batchPrimaryFiles = next
+          }
           this.version += 1
         }
       }
@@ -103,6 +173,7 @@ export const useRoleImageTaskStore = defineStore('roleImageTask', {
       this.failedCount = 0
       this.lastError = ''
       this.lastEvent = null
+      this.batchPrimaryFiles = {}
     },
   },
 })

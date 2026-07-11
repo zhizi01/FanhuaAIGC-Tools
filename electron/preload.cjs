@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('api', {
     save: (payload) => ipcRenderer.invoke('roles:save', payload),
     remove: (payload) => ipcRenderer.invoke('roles:remove', payload),
     importImages: (payload) => ipcRenderer.invoke('roles:importImages', payload),
+    importReferences: (payload) => ipcRenderer.invoke('roles:importReferences', payload),
     removeImage: (payload) => ipcRenderer.invoke('roles:removeImage', payload),
     generateImage: (payload) => ipcRenderer.invoke('roles:generateImage', payload),
   },

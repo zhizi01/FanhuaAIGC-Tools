@@ -66,10 +66,14 @@ function isInside(root, target) {
   return normalize(resolvedTarget).startsWith(normalize(resolvedRoot + path.sep))
 }
 
-function roleMetaFile(projectPath, roleId) {
+function safeRoleId(roleId) {
   const id = String(roleId || '').trim()
   if (!id || id !== path.basename(id)) throw new Error('角色ID无效')
-  return path.join(rolesDir(projectPath), id, 'meta.json')
+  return id
+}
+
+function roleMetaFile(projectPath, roleId) {
+  return path.join(rolesDir(projectPath), safeRoleId(roleId), 'meta.json')
 }
 
 function resolveReferenceImage(projectPath, relFile) {
@@ -136,7 +140,7 @@ function normalizedImageUsage(usage) {
 }
 
 async function generateRoleImage(payload) {
-  const { projectPath, roleId, prompt, referenceImages } = payload || {}
+  const { projectPath, roleId, prompt, referenceImages, variant } = payload || {}
   const cleanPrompt = String(prompt || '').trim()
   if (!projectPath || !roleId) throw new Error('缺少工程路径或角色ID')
   if (!cleanPrompt) throw new Error('人物形象提示词不能为空')
@@ -218,7 +222,10 @@ async function generateRoleImage(payload) {
   try {
     // 下载完成后读取最新角色数据再合并，避免覆盖生成期间用户保存的字段。
     const meta = JSON.parse(fs.readFileSync(metaFile, 'utf-8'))
-    meta.images = [...new Set([...toArray(meta.images), relativeFile])]
+    const existingImages = toArray(meta.images).filter((file) => file !== relativeFile)
+    meta.images = variant === 'sheet'
+      ? [relativeFile, ...existingImages]
+      : [...existingImages, relativeFile]
     meta.updatedAt = new Date().toISOString()
     fs.writeFileSync(metaFile, JSON.stringify(meta, null, 2), 'utf-8')
 
@@ -246,6 +253,7 @@ async function generateRoleImage(payload) {
     file: relativeFile,
     size: result?.data?.[0]?.size || '',
     model: result?.model || ARK_IMAGE_MODEL,
+    variant: variant || '',
     usage: normalizedImageUsage(result?.usage),
   }
 }
@@ -342,6 +350,25 @@ export function registerRolesIpc() {
       const name = `${genId('img')}.${ext}`
       fs.copyFileSync(fp, path.join(imgDir, name))
       added.push(`roles/${roleId}/images/${name}`)
+    }
+    return added
+  })
+
+  // 导入仅用于 AI 生图的参考文件，不写入角色 images，避免输入参考图混入最终形象图。
+  ipcMain.handle('roles:importReferences', (_e, payload) => {
+    const { projectPath, roleId, filePaths } = payload || {}
+    if (!projectPath || !roleId) throw new Error('缺少工程路径或角色ID')
+    const id = safeRoleId(roleId)
+    const refDir = path.join(rolesDir(projectPath), id, 'references')
+    fs.mkdirSync(refDir, { recursive: true })
+    const added = []
+    for (const fp of Array.isArray(filePaths) ? filePaths : []) {
+      if (!fp || !fs.existsSync(fp)) continue
+      const ext = path.extname(fp).slice(1).toLowerCase()
+      if (!IMAGE_EXT.includes(ext)) continue
+      const name = `${genId('ref')}.${ext}`
+      fs.copyFileSync(fp, path.join(refDir, name))
+      added.push(`roles/${id}/references/${name}`)
     }
     return added
   })
