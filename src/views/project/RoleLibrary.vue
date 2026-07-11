@@ -4,7 +4,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { message, Modal } from 'ant-design-vue'
-import { Users, Plus, Sparkles, Save, Trash2, Search, ImagePlus, Wand2, X, LoaderCircle, Check, Upload } from 'lucide-vue-next'
+import { Users, Plus, Sparkles, Save, Trash2, Search, ImagePlus, Wand2, X, LoaderCircle, Check, Upload, Eye, ChevronLeft, ChevronRight } from 'lucide-vue-next'
 import { useAppStore } from '../../store/appState.js'
 import { useRoleTaskStore } from '../../store/roleTasks.js'
 import { useRoleImageTaskStore } from '../../store/roleImageTasks.js'
@@ -61,6 +61,14 @@ const imageGenerateForm = reactive({
   references: [],
   referenceOptions: [],
 })
+const imagePreview = reactive({
+  open: false,
+  index: 0,
+})
+const previewImageFile = computed(() => form.images[imagePreview.index] || '')
+const previewImageTitle = computed(
+  () => `${form.name || '角色'} · 形象图 ${Math.min(imagePreview.index + 1, form.images.length)}/${form.images.length}`,
+)
 const imageStyleOptions = ROLE_IMAGE_STYLE_PRESETS.map((preset) => ({
   value: preset.value,
   label: preset.label,
@@ -106,6 +114,21 @@ function imgUrl(relFile) {
 }
 function roleThumbUrl(r) {
   return r.cover ? assetUrl(project.value?.path, r.cover) : ''
+}
+
+function openImagePreview(index) {
+  imagePreview.index = Math.max(0, Math.min(index, form.images.length - 1))
+  imagePreview.open = !!form.images.length
+}
+
+function previousPreviewImage() {
+  if (!form.images.length) return
+  imagePreview.index = (imagePreview.index - 1 + form.images.length) % form.images.length
+}
+
+function nextPreviewImage() {
+  if (!form.images.length) return
+  imagePreview.index = (imagePreview.index + 1) % form.images.length
 }
 
 // ---------- 列表与筛选 ----------
@@ -163,6 +186,7 @@ async function removeImage(relFile) {
   } catch {
     // 删文件失败不阻断，仅从列表移除
   }
+  if (previewImageFile.value === relFile) imagePreview.open = false
   form.images = form.images.filter((f) => f !== relFile)
   markDirty()
 }
@@ -405,6 +429,7 @@ function guardDirty(action) {
 }
 
 function applyRole(meta) {
+  imagePreview.open = false
   Object.assign(form, blankForm(), {
     id: meta.id,
     name: meta.name,
@@ -726,9 +751,17 @@ onMounted(async () => {
             <div class="images-section">
               <div class="section-label"><ImagePlus :size="15" /> 角色形象图</div>
               <div v-if="form.images.length" class="image-grid">
-                <div v-for="img in form.images" :key="img" class="image-cell">
-                  <img :src="imgUrl(img)" alt="形象图" />
-                  <button class="img-del" title="删除" @click="removeImage(img)"><X :size="14" /></button>
+                <div v-for="(img, index) in form.images" :key="img" class="image-cell">
+                  <button
+                    type="button"
+                    class="image-preview-trigger"
+                    :aria-label="`预览${form.name || '角色'}形象图 ${index + 1}`"
+                    @click="openImagePreview(index)"
+                  >
+                    <img :src="imgUrl(img)" :alt="`${form.name || '角色'}形象图 ${index + 1}`" />
+                    <span class="image-preview-mask"><Eye :size="16" /> 预览</span>
+                  </button>
+                  <button class="img-del" title="删除" @click.stop="removeImage(img)"><X :size="14" /></button>
                 </div>
               </div>
               <div class="image-action-row">
@@ -765,6 +798,43 @@ onMounted(async () => {
         </div>
       </template>
     </section>
+
+    <!-- 角色形象图大图预览 -->
+    <a-modal
+      v-model:open="imagePreview.open"
+      :title="previewImageTitle"
+      :width="1040"
+      :footer="null"
+      centered
+      wrap-class-name="role-image-preview-modal"
+    >
+      <div class="role-image-preview-stage">
+        <button
+          v-if="form.images.length > 1"
+          type="button"
+          class="preview-nav previous"
+          aria-label="预览上一张形象图"
+          @click="previousPreviewImage"
+        >
+          <ChevronLeft :size="24" />
+        </button>
+        <img
+          v-if="previewImageFile"
+          :src="imgUrl(previewImageFile)"
+          :alt="previewImageTitle"
+        />
+        <button
+          v-if="form.images.length > 1"
+          type="button"
+          class="preview-nav next"
+          aria-label="预览下一张形象图"
+          @click="nextPreviewImage"
+        >
+          <ChevronRight :size="24" />
+        </button>
+      </div>
+      <div class="role-image-preview-hint">点击左右按钮可切换当前角色的全部形象图</div>
+    </a-modal>
 
     <!-- AI 调整角色信息 -->
     <a-modal
@@ -1305,6 +1375,37 @@ onMounted(async () => {
   height: 100%;
   object-fit: cover;
 }
+.image-preview-trigger {
+  width: 100%;
+  height: 100%;
+  display: block;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: zoom-in;
+}
+.image-preview-trigger:focus-visible {
+  outline: 2px solid var(--brand-color);
+  outline-offset: -2px;
+}
+.image-preview-mask {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font-size: 12px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
+}
+.image-cell:hover .image-preview-mask,
+.image-preview-trigger:focus-visible .image-preview-mask {
+  opacity: 1;
+}
 .img-del {
   position: absolute;
   top: 6px;
@@ -1320,6 +1421,7 @@ onMounted(async () => {
   color: #fff;
   cursor: pointer;
   opacity: 0;
+  z-index: 2;
   transition: opacity 0.14s ease;
 }
 .image-cell:hover .img-del {
@@ -1360,6 +1462,61 @@ onMounted(async () => {
   margin-top: 10px;
   font-size: 12px;
   color: var(--text-tertiary);
+}
+.role-image-preview-stage {
+  position: relative;
+  height: min(70vh, 720px);
+  min-height: 360px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: #080b10;
+}
+.role-image-preview-stage > img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.preview-nav {
+  position: absolute;
+  top: 50%;
+  z-index: 2;
+  width: 42px;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.52);
+  color: #fff;
+  cursor: pointer;
+  transform: translateY(-50%);
+  transition: background 0.18s ease, border-color 0.18s ease;
+}
+.preview-nav:hover,
+.preview-nav:focus-visible {
+  border-color: var(--brand-color);
+  background: rgba(0, 0, 0, 0.78);
+  outline: none;
+}
+.preview-nav.previous {
+  left: 14px;
+}
+.preview-nav.next {
+  right: 14px;
+}
+.role-image-preview-hint {
+  margin-top: 9px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  text-align: center;
+}
+:global(.role-image-preview-modal .ant-modal-body) {
+  padding-top: 8px;
 }
 .form-row {
   display: flex;
