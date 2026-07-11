@@ -4,15 +4,22 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { message, Modal } from 'ant-design-vue'
-import { Users, Plus, Sparkles, Save, Trash2, Search, ImagePlus, Wand2, X, LoaderCircle } from 'lucide-vue-next'
+import { Users, Plus, Sparkles, Save, Trash2, Search, ImagePlus, Wand2, X, LoaderCircle, Check, Upload } from 'lucide-vue-next'
 import { useAppStore } from '../../store/appState.js'
 import { useRoleTaskStore } from '../../store/roleTasks.js'
+import { useRoleImageTaskStore } from '../../store/roleImageTasks.js'
 import { api } from '../../services/bridge.js'
 import { genLocalId } from '../../utils/id.js'
 import { assetUrl } from '../../utils/asset.js'
+import {
+  ROLE_IMAGE_STYLE_PRESETS,
+  buildRoleAppearancePrompt,
+  buildRoleReferencePrompt,
+} from '../../utils/roleImagePrompt.js'
 
 const appStore = useAppStore()
 const roleTask = useRoleTaskStore()
+const roleImageTask = useRoleImageTaskStore()
 const route = useRoute()
 const router = useRouter()
 const project = computed(() => appStore.currentProject)
@@ -32,6 +39,17 @@ const search = ref('')
 const filterType = ref('')
 
 const form = reactive(blankForm())
+const imageGenerateOpen = ref(false)
+const imageGenerateSubmitting = ref(false)
+const imageGenerateForm = reactive({
+  appearancePrompt: '',
+  stylePreset: ROLE_IMAGE_STYLE_PRESETS[0].value,
+  stylePrompt: ROLE_IMAGE_STYLE_PRESETS[0].prompt,
+  references: [],
+})
+const imageGenerationConfigured = computed(
+  () => !!String(appStore.settings.imageGeneration?.apiKey || '').trim(),
+)
 
 function blankForm() {
   return {
@@ -84,10 +102,10 @@ async function loadRoles() {
 
 // ---------- 形象图：上传 / 删除 / AI生成(TODO) ----------
 async function uploadImages() {
-  if (!project.value?.path || !form.id) return
+  if (!project.value?.path || !form.id) return []
   try {
     const filePaths = await api.dialog.selectAssetFiles()
-    if (!filePaths || !filePaths.length) return
+    if (!filePaths || !filePaths.length) return []
     uploadingImages.value = true
     const added = await api.roles.importImages({
       projectPath: project.value.path,
@@ -101,8 +119,10 @@ async function uploadImages() {
     } else {
       message.warning('未选择到有效图片（支持 png/jpg/jpeg/webp/gif）')
     }
+    return added
   } catch (err) {
     message.error('上传失败：' + err.message)
+    return []
   } finally {
     uploadingImages.value = false
   }
@@ -118,9 +138,72 @@ async function removeImage(relFile) {
   markDirty()
 }
 
-// TODO: 接入图片生成模型后，改为后台任务生成角色形象图
 function aiGenerateImage() {
-  message.info('AI 形象图生成能力开发中（已预留 TODO）')
+  if (!project.value?.path || !form.id) return
+  if (!form.name.trim()) return message.warning('请先填写角色名')
+  if (roleImageTask.hasRole(form.id)) return message.warning('该角色已有图片生成任务，请等待完成')
+  const preset = ROLE_IMAGE_STYLE_PRESETS[0]
+  Object.assign(imageGenerateForm, {
+    appearancePrompt: buildRoleAppearancePrompt(form),
+    stylePreset: preset.value,
+    stylePrompt: preset.prompt,
+    references: form.images.slice(0, 3),
+  })
+  imageGenerateOpen.value = true
+}
+
+function selectImageStyle(preset) {
+  imageGenerateForm.stylePreset = preset.value
+  imageGenerateForm.stylePrompt = preset.prompt
+}
+
+function toggleReference(relFile) {
+  const selected = imageGenerateForm.references
+  const index = selected.indexOf(relFile)
+  if (index >= 0) {
+    selected.splice(index, 1)
+    return
+  }
+  if (selected.length >= 10) return message.warning('最多选择 10 张参考图')
+  selected.push(relFile)
+}
+
+async function uploadGenerationReferences() {
+  const added = await uploadImages()
+  added.forEach((file) => {
+    if (imageGenerateForm.references.length < 10 && !imageGenerateForm.references.includes(file)) {
+      imageGenerateForm.references.push(file)
+    }
+  })
+}
+
+async function confirmImageGeneration() {
+  let prompt
+  try {
+    prompt = buildRoleReferencePrompt(imageGenerateForm)
+  } catch (err) {
+    return message.warning(err.message)
+  }
+  imageGenerateSubmitting.value = true
+  try {
+    if (dirty.value || !roles.value.some((role) => role.id === form.id)) {
+      const saved = await saveRole({ silent: true })
+      if (!saved) return
+    }
+    const result = roleImageTask.enqueue({
+      projectPath: project.value.path,
+      projectName: project.value.name,
+      roleId: form.id,
+      roleName: form.name.trim(),
+      prompt,
+      referenceImages: imageGenerateForm.references,
+    })
+    if (!result.ok) return message.warning(result.reason)
+    imageGenerateOpen.value = false
+    message.success(result.position > 1 ? `已加入生成队列，前方有 ${result.position - 1} 个任务` : '已开始生成角色参考图')
+  } finally {
+    imageGenerateSubmitting.value = false
+  }
 }
 
 // ---------- AI 调整角色信息（后台运行） ----------
@@ -178,6 +261,24 @@ watch(
       openExtractResult()
     } else if (roleTask.status === 'error') {
       message.error((roleTask.kind === 'extract' ? 'AI提取角色失败：' : 'AI调整角色信息失败：') + roleTask.error)
+    }
+  },
+)
+
+// 生成任务由全局队列执行；完成后只同步当前表单的图片列表，不覆盖用户正在编辑的文字字段。
+watch(
+  () => roleImageTask.version,
+  async () => {
+    await loadRoles()
+    const event = roleImageTask.lastEvent
+    if (
+      event?.status === 'done' &&
+      event.projectPath === project.value?.path &&
+      event.roleId === activeRoleId.value &&
+      event.result?.file &&
+      !form.images.includes(event.result.file)
+    ) {
+      form.images.push(event.result.file)
     }
   },
 )
@@ -242,9 +343,13 @@ function markDirty() {
 }
 
 // ---------- 保存 / 删除 ----------
-async function saveRole() {
-  if (!project.value?.path) return
-  if (!form.name.trim()) return message.warning('请填写角色名')
+async function saveRole(options = {}) {
+  const silent = options?.silent === true
+  if (!project.value?.path) return null
+  if (!form.name.trim()) {
+    message.warning('请填写角色名')
+    return null
+  }
   saving.value = true
   try {
     const meta = await api.roles.save({
@@ -256,9 +361,11 @@ async function saveRole() {
     form.id = meta.id
     form.createdAt = meta.createdAt
     dirty.value = false
-    message.success('已保存')
+    if (!silent) message.success('已保存')
+    return meta
   } catch (err) {
     message.error('保存失败：' + err.message)
+    return null
   } finally {
     saving.value = false
   }
@@ -445,7 +552,7 @@ onMounted(async () => {
               <template #icon><Wand2 :size="15" /></template>
               AI调整
             </a-button>
-            <a-button danger @click="removeRole">
+            <a-button danger :disabled="roleImageTask.hasRole(form.id)" @click="removeRole">
               <template #icon><Trash2 :size="15" /></template>
               删除
             </a-button>
@@ -460,6 +567,14 @@ onMounted(async () => {
           <div class="role-form">
             <div v-if="roleTask.active && roleTask.roleId === form.id" class="ai-banner">
               <LoaderCircle :size="15" class="spin" /> AI 正在后台调整该角色的外观、性格与声线…
+            </div>
+            <div v-if="roleImageTask.hasRole(form.id)" class="ai-banner">
+              <LoaderCircle :size="15" class="spin" />
+              {{
+                roleImageTask.queuedPosition(form.id) === 0
+                  ? '正在生成该角色的参考图，完成后会自动下载…'
+                  : `该角色参考图正在队列第 ${roleImageTask.queuedPosition(form.id)} 位等待…`
+              }}
             </div>
 
             <a-form layout="vertical">
@@ -511,12 +626,25 @@ onMounted(async () => {
                   <ImagePlus :size="20" />
                   <span>{{ uploadingImages ? '上传中…' : '上传图片' }}</span>
                 </button>
-                <button class="image-add" @click="aiGenerateImage">
-                  <Wand2 :size="20" />
-                  <span>AI生成</span>
+                <button
+                  class="image-add"
+                  :disabled="roleImageTask.hasRole(form.id)"
+                  @click="aiGenerateImage"
+                >
+                  <LoaderCircle v-if="roleImageTask.hasRole(form.id)" :size="20" class="spin" />
+                  <Wand2 v-else :size="20" />
+                  <span>
+                    {{
+                      roleImageTask.hasRole(form.id)
+                        ? roleImageTask.queuedPosition(form.id) === 0
+                          ? '生成中'
+                          : '排队中'
+                        : 'AI生成'
+                    }}
+                  </span>
                 </button>
               </div>
-              <div class="section-hint">支持 png / jpg / jpeg / webp / gif，可添加多张；AI 生成暂为预留能力。</div>
+              <div class="section-hint">支持 png / jpg / jpeg / webp / gif，可添加多张；AI 任务按队列串行生成并自动下载。</div>
             </div>
           </div>
         </div>
@@ -541,6 +669,98 @@ onMounted(async () => {
         :rows="5"
         placeholder="例如：外观更有都市冷感，性格更克制但内心有爆发力；声线偏低、略沙哑，适合短剧女主。"
       />
+    </a-modal>
+
+    <!-- 角色参考图生成 -->
+    <a-modal
+      v-model:open="imageGenerateOpen"
+      title="生成角色参考图"
+      :width="760"
+      :confirm-loading="imageGenerateSubmitting"
+      ok-text="加入生成队列"
+      cancel-text="取消"
+      @ok="confirmImageGeneration"
+    >
+      <div class="image-gen-model-note">
+        <Sparkles :size="15" />
+        固定使用 doubao-seedream-5-0-260128 · 2K · 单图 · 无水印
+      </div>
+      <a-alert
+        v-if="!imageGenerationConfigured"
+        type="warning"
+        show-icon
+        class="image-gen-alert"
+        message="设置中尚未填写 ARK API Key"
+        description="如果启动环境中也没有 ARK_API_KEY，任务会失败。可先取消并前往设置页完成配置。"
+      />
+
+      <a-form layout="vertical">
+        <a-form-item label="人物形象提示词" required>
+          <a-textarea
+            v-model:value="imageGenerateForm.appearancePrompt"
+            :rows="5"
+            placeholder="描述年龄、性别、五官、发型、体型、服装和人物气质"
+          />
+          <div class="field-help">已根据当前角色资料生成初稿，可在提交前继续细化。</div>
+        </a-form-item>
+
+        <a-form-item label="生成风格提示词" required>
+          <div class="style-preset-grid" role="radiogroup" aria-label="生成风格预设">
+            <button
+              v-for="preset in ROLE_IMAGE_STYLE_PRESETS"
+              :key="preset.value"
+              type="button"
+              class="style-preset"
+              :class="{ active: imageGenerateForm.stylePreset === preset.value }"
+              :aria-pressed="imageGenerateForm.stylePreset === preset.value"
+              @click="selectImageStyle(preset)"
+            >
+              <span>
+                {{ preset.label }}
+                <Check v-if="imageGenerateForm.stylePreset === preset.value" :size="13" />
+              </span>
+              <small>{{ preset.description }}</small>
+            </button>
+          </div>
+          <a-textarea
+            v-model:value="imageGenerateForm.stylePrompt"
+            :rows="3"
+            class="style-prompt-input"
+            placeholder="选择预设后仍可自定义风格细节"
+          />
+        </a-form-item>
+
+        <a-form-item :label="`参考图（可选，已选 ${imageGenerateForm.references.length}/10）`">
+          <div v-if="form.images.length" class="reference-picker">
+            <button
+              v-for="img in form.images"
+              :key="img"
+              type="button"
+              class="reference-option"
+              :class="{ active: imageGenerateForm.references.includes(img) }"
+              :aria-pressed="imageGenerateForm.references.includes(img)"
+              @click="toggleReference(img)"
+            >
+              <img :src="imgUrl(img)" alt="角色参考图" />
+              <span v-if="imageGenerateForm.references.includes(img)" class="reference-check">
+                <Check :size="14" />
+              </span>
+            </button>
+          </div>
+          <div v-else class="reference-empty">暂无参考图，将直接根据文字生成。</div>
+          <button
+            type="button"
+            class="reference-upload"
+            :disabled="uploadingImages || imageGenerateForm.references.length >= 10"
+            @click="uploadGenerationReferences"
+          >
+            <LoaderCircle v-if="uploadingImages" :size="14" class="spin" />
+            <Upload v-else :size="14" />
+            {{ uploadingImages ? '上传中…' : '上传并选为参考图' }}
+          </button>
+          <div class="field-help">参考图会以 Base64 发送给模型，仅用于保持人物身份、服装或画风一致。</div>
+        </a-form-item>
+      </a-form>
     </a-modal>
 
     <!-- AI 提取角色结果 -->
@@ -949,6 +1169,163 @@ onMounted(async () => {
 }
 .w-full {
   width: 100%;
+}
+
+/* 角色参考图生成弹窗 */
+.image-gen-model-note {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 14px;
+  padding: 9px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+.image-gen-model-note svg {
+  flex-shrink: 0;
+  color: var(--brand-color);
+}
+.image-gen-alert {
+  margin-bottom: 14px;
+}
+.field-help {
+  margin-top: 6px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.style-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.style-preset {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
+}
+.style-preset:hover,
+.style-preset.active {
+  border-color: var(--brand-color);
+  background: var(--brand-soft);
+}
+.style-preset.active {
+  color: var(--brand-color);
+}
+.style-preset:focus-visible,
+.reference-option:focus-visible,
+.reference-upload:focus-visible {
+  outline: 2px solid var(--brand-color);
+  outline-offset: 2px;
+}
+.style-preset span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.style-preset small {
+  display: block;
+  overflow: hidden;
+  margin-top: 3px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.style-prompt-input {
+  margin-top: 8px;
+}
+.reference-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: 8px;
+  max-height: 214px;
+  padding: 2px;
+  overflow-y: auto;
+}
+.reference-option {
+  position: relative;
+  aspect-ratio: 1;
+  padding: 0;
+  overflow: hidden;
+  border: 2px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
+  cursor: pointer;
+  transition: border-color 0.18s ease, opacity 0.18s ease;
+}
+.reference-option:hover {
+  border-color: var(--border-strong);
+}
+.reference-option.active {
+  border-color: var(--brand-color);
+}
+.reference-option img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.reference-option:not(.active) img {
+  opacity: 0.72;
+}
+.reference-check {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--brand-color);
+  color: var(--text-onbrand);
+  box-shadow: var(--shadow-sm);
+}
+.reference-empty {
+  padding: 18px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
+  color: var(--text-tertiary);
+  font-size: 12px;
+  text-align: center;
+}
+.reference-upload {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
+}
+.reference-upload:hover:not(:disabled) {
+  border-color: var(--brand-color);
+  background: var(--brand-soft);
+  color: var(--brand-color);
+}
+.reference-upload:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* AI 提取角色弹窗 */

@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld('api', {
     remove: (payload) => ipcRenderer.invoke('roles:remove', payload),
     importImages: (payload) => ipcRenderer.invoke('roles:importImages', payload),
     removeImage: (payload) => ipcRenderer.invoke('roles:removeImage', payload),
+    generateImage: (payload) => ipcRenderer.invoke('roles:generateImage', payload),
   },
   // 资产库
   assets: {
@@ -57,6 +58,7 @@ contextBridge.exposeInMainWorld('api', {
     selectScriptFile: () => ipcRenderer.invoke('dialog:selectScriptFile'),
     selectAssetFiles: () => ipcRenderer.invoke('dialog:selectAssetFiles'),
     exportScript: (payload) => ipcRenderer.invoke('dialog:exportScript', payload),
+    exportVideo: (payload) => ipcRenderer.invoke('dialog:exportVideo', payload),
   },
   // 工程 Token 用量
   usage: {

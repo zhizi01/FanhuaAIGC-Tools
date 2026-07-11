@@ -12,12 +12,14 @@ import {
   BookOpen,
   Clapperboard,
   ClipboardCheck,
+  Download,
   FileText,
   FolderKanban,
   GitBranchPlus,
   GripVertical,
   Image,
   LoaderCircle,
+  Lock,
   LocateFixed,
   MousePointer2,
   Pencil,
@@ -156,6 +158,10 @@ const contextNode = computed(() => nodes.value.find((n) => n.id === contextMenu.
 const contextEditTarget = computed(() => NODE_EDIT_TARGETS[contextNode.value?.type] || null)
 const canEditContextNode = computed(() => !!contextEditTarget.value)
 const contextIsGroup = computed(() => contextNode.value?.type === 'group')
+const contextIsVideoNode = computed(() =>
+  ['shot-node', 'master-output-node'].includes(contextNode.value?.type),
+)
+const contextVideoReady = computed(() => !!String(contextNode.value?.data?.video || '').trim())
 const currentScript = computed(() => scriptDialog.scripts[0] || null)
 const scriptPortTop = computed(() => scriptCardHeight() - 18 - 52)
 const scriptRoleHandleTop = computed(() => `${scriptPortTop.value + 11}px`)
@@ -1476,6 +1482,23 @@ function editContextNode() {
   router.push({ path: target.path, query: cleanQuery })
 }
 
+async function exportContextVideo() {
+  const node = contextNode.value
+  const source = String(node?.data?.video || '').trim()
+  if (!contextIsVideoNode.value || !source) return
+  closeMenu()
+  try {
+    const savedPath = await api.dialog.exportVideo({
+      projectPath: project.value?.path,
+      source,
+      defaultName: node.data?.title || (node.type === 'master-output-node' ? '总视频' : '分镜视频'),
+    })
+    if (savedPath) message.success('视频已导出到：' + savedPath)
+  } catch (err) {
+    message.error('视频导出失败：' + err.message)
+  }
+}
+
 // ---------- 卡片分组 ----------
 function groupSelected() {
   closeMenu()
@@ -2035,6 +2058,16 @@ onBeforeUnmount(() => {
       >
         <!-- 节点卡片菜单：编辑 / 删除 -->
         <template v-if="contextMenu.target === 'node'">
+          <button
+            v-if="contextIsVideoNode"
+            :disabled="!contextVideoReady"
+            :title="contextVideoReady ? '将视频导出到本地' : '视频生成后可导出'"
+            @click="exportContextVideo"
+          >
+            <Download :size="14" /> 导出视频
+            <Lock v-if="!contextVideoReady" :size="12" class="context-action-lock" />
+          </button>
+          <div v-if="contextIsVideoNode" class="context-separator" />
           <button v-if="canEditContextNode" @click="editContextNode">
             <Pencil :size="14" /> 编辑{{ contextEditTarget?.label }}
           </button>
@@ -3561,6 +3594,18 @@ onBeforeUnmount(() => {
 .context-menu button:hover {
   color: var(--brand-color);
   background: var(--bg-hover);
+}
+.context-menu button:disabled {
+  color: var(--text-tertiary);
+  opacity: 0.52;
+  cursor: not-allowed;
+}
+.context-menu button:disabled:hover {
+  color: var(--text-tertiary);
+  background: transparent;
+}
+.context-action-lock {
+  margin-left: auto;
 }
 .context-menu button.danger {
   color: #ef4444;

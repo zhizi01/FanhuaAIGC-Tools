@@ -1,12 +1,14 @@
 <script setup>
-// 全局 AI 任务状态浮标：剧本生成/标准化、角色提取/调整，运行中/完成/失败，跨界面常驻
+// 全局 AI 任务状态浮标：剧本、角色信息与角色参考图任务，跨界面常驻
 import { computed, watch, onBeforeUnmount } from 'vue'
-import { LoaderCircle, CheckCircle2, AlertCircle, X } from 'lucide-vue-next'
+import { LoaderCircle, CheckCircle2, AlertCircle, X, ImagePlus } from 'lucide-vue-next'
 import { useAiTaskStore } from '../store/aiTasks.js'
 import { useRoleTaskStore } from '../store/roleTasks.js'
+import { useRoleImageTaskStore } from '../store/roleImageTasks.js'
 
 const aiTask = useAiTaskStore()
 const roleTask = useRoleTaskStore()
+const roleImageTask = useRoleImageTaskStore()
 
 // ---------- 剧本任务 ----------
 const aiVisible = computed(() => aiTask.status !== 'idle')
@@ -33,8 +35,34 @@ const roleDesc = computed(() => {
   return roleTask.roleName ? `正在强化外观、性格与声线：${roleTask.roleName}` : ''
 })
 
+// ---------- 角色参考图串行队列 ----------
+const imageVisible = computed(() => roleImageTask.status !== 'idle')
+const imageStatus = computed(() => (roleImageTask.processing ? 'running' : roleImageTask.status))
+const imageTitle = computed(() => {
+  if (imageStatus.value === 'running') return '正在生成角色参考图…'
+  if (imageStatus.value === 'done') return '角色参考图生成完成'
+  return '角色参考图队列存在失败任务'
+})
+const imageDesc = computed(() => {
+  if (imageStatus.value === 'error') return roleImageTask.lastError
+  if (imageStatus.value === 'done') return `已完成 ${roleImageTask.completedCount} 个生成任务`
+  const task = roleImageTask.activeTask
+  return task ? `${task.roleName}${task.projectName ? ` · ${task.projectName}` : ''}` : '正在准备任务…'
+})
+const imageHint = computed(() => {
+  if (imageStatus.value === 'running') {
+    const waiting = Math.max(0, roleImageTask.pendingCount - 1)
+    return waiting ? `当前任务完成后将继续处理 ${waiting} 个排队任务` : '图片返回后会自动下载并加入角色形象'
+  }
+  if (imageStatus.value === 'error') {
+    return `成功 ${roleImageTask.completedCount} 个 · 失败 ${roleImageTask.failedCount} 个`
+  }
+  return '生成图片已保存到对应角色目录'
+})
+
 let aiTimer = null
 let roleTimer = null
+let imageTimer = null
 
 watch(
   () => aiTask.status,
@@ -62,9 +90,22 @@ watch(
   },
 )
 
+watch(
+  () => roleImageTask.status,
+  (status) => {
+    if (imageTimer) {
+      clearTimeout(imageTimer)
+      imageTimer = null
+    }
+    if (status === 'done') imageTimer = setTimeout(() => roleImageTask.dismiss(), 8000)
+    if (status === 'error') imageTimer = setTimeout(() => roleImageTask.dismiss(), 12000)
+  },
+)
+
 onBeforeUnmount(() => {
   if (aiTimer) clearTimeout(aiTimer)
   if (roleTimer) clearTimeout(roleTimer)
+  if (imageTimer) clearTimeout(imageTimer)
 })
 
 function closeAi() {
@@ -74,6 +115,10 @@ function closeAi() {
 function closeRole() {
   if (roleTimer) clearTimeout(roleTimer)
   roleTask.dismiss()
+}
+function closeImage() {
+  if (imageTimer) clearTimeout(imageTimer)
+  roleImageTask.dismiss()
 }
 </script>
 
@@ -116,6 +161,24 @@ function closeRole() {
           <div class="ai-desc">{{ roleDesc }}</div>
         </div>
         <button v-if="roleTask.status !== 'running'" class="ai-close" @click="closeRole">
+          <X :size="15" />
+        </button>
+      </div>
+    </transition>
+
+    <transition name="fade-up">
+      <div v-if="imageVisible" class="ai-indicator" :class="imageStatus">
+        <div class="ai-ico">
+          <LoaderCircle v-if="imageStatus === 'running'" :size="20" class="spin" />
+          <CheckCircle2 v-else-if="imageStatus === 'done'" :size="20" />
+          <AlertCircle v-else :size="20" />
+        </div>
+        <div class="ai-body">
+          <div class="ai-title"><ImagePlus :size="14" /> {{ imageTitle }}</div>
+          <div class="ai-desc">{{ imageDesc }}</div>
+          <div class="ai-hint">{{ imageHint }}</div>
+        </div>
+        <button v-if="imageStatus !== 'running'" class="ai-close" @click="closeImage">
           <X :size="15" />
         </button>
       </div>
@@ -174,6 +237,9 @@ function closeRole() {
   min-width: 0;
 }
 .ai-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);

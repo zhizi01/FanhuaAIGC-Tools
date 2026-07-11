@@ -51,6 +51,7 @@ export const useAppStore = defineStore('app', {
   state: () => ({
     settings: {
       appearance: { themeMode: 'dark', primaryColor: '#1ec9b0', density: 'comfortable', background: 'grid' },
+      imageGeneration: { apiKey: '' },
       models: [],
     },
     currentProject: null,

@@ -2,7 +2,7 @@
 import { computed, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { message, Modal } from 'ant-design-vue'
-import { ArrowLeft, Plus, Pencil, Trash2, Star, Palette, Cpu } from 'lucide-vue-next'
+import { ArrowLeft, Plus, Pencil, Trash2, Star, Palette, Cpu, ImagePlus, KeyRound } from 'lucide-vue-next'
 import { useAppStore } from '../store/appState.js'
 import { genLocalId } from '../utils/id.js'
 
@@ -47,12 +47,35 @@ function onContextPresetChange(v) {
 
 const appearance = computed(() => appStore.settings.appearance)
 const models = computed(() => appStore.settings.models)
+const imageApiKey = ref(appStore.settings.imageGeneration?.apiKey || '')
+const savingImageApiKey = ref(false)
+const imageApiKeyDirty = computed(
+  () => imageApiKey.value.trim() !== String(appStore.settings.imageGeneration?.apiKey || ''),
+)
 
 async function updateAppearance(patch) {
   await appStore.saveSettings({
     ...appStore.settings,
     appearance: { ...appStore.settings.appearance, ...patch },
   })
+}
+
+async function saveImageGenerationSettings() {
+  savingImageApiKey.value = true
+  try {
+    await appStore.saveSettings({
+      ...appStore.settings,
+      imageGeneration: {
+        ...(appStore.settings.imageGeneration || {}),
+        apiKey: imageApiKey.value.trim(),
+      },
+    })
+    message.success('图片生成模型配置已保存')
+  } catch (err) {
+    message.error('保存失败：' + err.message)
+  } finally {
+    savingImageApiKey.value = false
+  }
 }
 
 // 模型编辑弹窗
@@ -301,6 +324,48 @@ function formatContext(size) {
 
         <a-empty v-else description="还没有模型配置，点击「添加模型」创建" />
       </section>
+
+      <!-- 固定图片生成模型 -->
+      <section class="settings-card">
+        <div class="card-title">
+          <ImagePlus :size="18" /> 图片生成模型
+          <a-tag color="cyan">固定模型</a-tag>
+        </div>
+        <div class="card-desc">角色参考图使用火山方舟 Seedream 5.0 串行生成，生成结果会自动下载到当前工程。</div>
+
+        <div class="image-model-summary">
+          <div>
+            <span>模型</span>
+            <strong>doubao-seedream-5-0-260128</strong>
+          </div>
+          <div>
+            <span>输出规格</span>
+            <strong>2K · 无水印 · 单图</strong>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-label">
+            <div class="label-title"><KeyRound :size="14" /> ARK API Key</div>
+            <div class="label-desc">保存在本机设置中；留空时会尝试读取启动环境中的 ARK_API_KEY。</div>
+          </div>
+          <div class="image-key-control">
+            <a-input-password
+              v-model:value="imageApiKey"
+              placeholder="填写火山方舟 API Key"
+              @press-enter="saveImageGenerationSettings"
+            />
+            <a-button
+              type="primary"
+              :loading="savingImageApiKey"
+              :disabled="!imageApiKeyDirty"
+              @click="saveImageGenerationSettings"
+            >
+              保存
+            </a-button>
+          </div>
+        </div>
+      </section>
     </div>
 
     <a-modal
@@ -422,6 +487,9 @@ function formatContext(size) {
   border-top: none;
 }
 .label-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 14px;
   color: var(--text-primary);
 }
@@ -503,5 +571,42 @@ function formatContext(size) {
   display: flex;
   gap: 2px;
   flex-shrink: 0;
+}
+.image-model-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.image-model-summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+}
+.image-model-summary span {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+.image-model-summary strong {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.image-key-control {
+  width: min(430px, 56%);
+  display: flex;
+  gap: 8px;
+}
+.image-key-control :deep(.ant-input-affix-wrapper) {
+  flex: 1;
 }
 </style>

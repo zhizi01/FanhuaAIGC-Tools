@@ -11,12 +11,16 @@ const DEFAULTS = {
     density: 'comfortable', // comfortable | compact
     background: 'grid', // none | grid | dots | glow
   },
+  imageGeneration: {
+    apiKey: '',
+  },
   models: [],
 }
 
 function normalize(data) {
   return {
     appearance: { ...DEFAULTS.appearance, ...(data?.appearance || {}) },
+    imageGeneration: { ...DEFAULTS.imageGeneration, ...(data?.imageGeneration || {}) },
     models: Array.isArray(data?.models) ? data.models : [],
   }
 }

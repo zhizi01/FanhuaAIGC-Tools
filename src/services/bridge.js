@@ -8,6 +8,7 @@ const LS_RECENT = 'qs_recent_projects'
 
 const DEFAULT_SETTINGS = {
   appearance: { themeMode: 'dark', primaryColor: '#1ec9b0', density: 'comfortable', background: 'grid' },
+  imageGeneration: { apiKey: '' },
   models: [],
 }
 
@@ -62,6 +63,7 @@ function wrapElectronApi(raw) {
       remove: (payload) => raw.roles.remove(toPlain(payload)),
       importImages: (payload) => raw.roles.importImages(toPlain(payload)),
       removeImage: (payload) => raw.roles.removeImage(toPlain(payload)),
+      generateImage: (payload) => raw.roles.generateImage(toPlain(payload)),
     },
     assets: {
       list: (projectPath) => raw.assets.list(projectPath),
@@ -86,6 +88,7 @@ function wrapElectronApi(raw) {
       selectScriptFile: () => raw.dialog.selectScriptFile(),
       selectAssetFiles: () => raw.dialog.selectAssetFiles(),
       exportScript: (payload) => raw.dialog.exportScript(toPlain(payload)),
+      exportVideo: (payload) => raw.dialog.exportVideo(toPlain(payload)),
     },
     usage: {
       get: (projectPath) => raw.usage.get(projectPath),
@@ -126,6 +129,7 @@ const fallbackApi = {
     remove: desktopOnly('删除角色'),
     importImages: desktopOnly('上传角色形象图'),
     removeImage: desktopOnly('删除角色形象图'),
+    generateImage: desktopOnly('生成角色形象图'),
   },
   assets: {
     list: async () => [],
@@ -170,6 +174,7 @@ const fallbackApi = {
     selectScriptFile: desktopOnly('选择剧本文件'),
     selectAssetFiles: desktopOnly('选择资产文件'),
     exportScript: desktopOnly('导出剧本'),
+    exportVideo: desktopOnly('导出视频'),
   },
   usage: {
     get: async (projectPath) => lsGet('qs_usage_' + projectPath, { totalTokens: 0, promptTokens: 0, completionTokens: 0, requests: 0 }),
