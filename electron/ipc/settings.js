@@ -20,8 +20,6 @@ const DEFAULTS = {
     secretKey: '',
     bucket: '', // 格式 examplebucket-1250000000
     region: '', // 如 ap-guangzhou
-    prefix: '', // 可选：对象目录前缀
-    domain: '', // 可选：自定义访问域名
   },
   models: [],
 }

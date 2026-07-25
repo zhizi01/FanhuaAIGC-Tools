@@ -11,6 +11,21 @@ function uploadsFile(projectPath) {
   return path.join(dir, 'uploads.json')
 }
 
+// 云端目录用工程 ID，同一台机器上多个工程的图片互不混淆
+function readProjectId(projectPath) {
+  const file = path.join(projectPath, 'project.json')
+  if (!fs.existsSync(file)) throw new Error('当前目录不是有效工程，缺少 project.json')
+  let meta
+  try {
+    meta = JSON.parse(fs.readFileSync(file, 'utf-8'))
+  } catch {
+    throw new Error('工程信息 project.json 解析失败')
+  }
+  const id = String(meta?.id || '').trim()
+  if (!id) throw new Error('工程信息缺少 ID，请重新打开工程')
+  return id
+}
+
 function readUploads(projectPath) {
   const file = uploadsFile(projectPath)
   if (!fs.existsSync(file)) return {}
@@ -53,8 +68,8 @@ export async function uploadProjectImage(projectPath, relFile, { force = false }
     return { file: rel, url: cached.url, key: cached.key, cached: true }
   }
 
-  const { key, url, size } = await uploadImageFile(absPath)
-  items[rel] = { key, url, size, mtimeMs: stat.mtimeMs, uploadedAt: new Date().toISOString() }
+  const { key, url } = await uploadImageFile(absPath, readProjectId(projectPath))
+  items[rel] = { key, url, size: stat.size, mtimeMs: stat.mtimeMs, uploadedAt: new Date().toISOString() }
   writeUploads(projectPath, items)
   return { file: rel, url, key, cached: false }
 }

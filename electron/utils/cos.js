@@ -1,18 +1,15 @@
 // 腾讯云 COS 对象存储：把工程内的本地图片上传成公网链接
 // 视频生成模型只接受图片链接（不支持本地文件 / base64），因此参与生成的图片需要先云存
+import { nativeImage } from 'electron'
 import COS from 'cos-nodejs-sdk-v5'
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { readJson } from './store.js'
 
-const IMAGE_MIME = {
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.png': 'image/png',
-  '.webp': 'image/webp',
-  '.gif': 'image/gif',
-}
+// 可以交给 nativeImage 解码的来源格式；webp/gif 无法解码，会在转码时给出明确报错
+const SUPPORTED_EXT = ['.jpg', '.jpeg', '.png', '.bmp']
+const JPEG_QUALITY = 92
 
 // 单张图片上限，超过则不上传，避免长时间卡住生成流程
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024
@@ -29,8 +26,6 @@ export function readCosConfig() {
     secretKey: String(cos.secretKey || '').trim(),
     bucket: String(cos.bucket || '').trim(),
     region: String(cos.region || '').trim(),
-    prefix: String(cos.prefix || '').trim(),
-    domain: String(cos.domain || '').trim(),
   }
 }
 
@@ -75,48 +70,61 @@ function toReadableError(err, action) {
   return new Error(`${action}：${detail || code || '未知错误'}`)
 }
 
-// 对象键统一为 uuid.jpg（可带目录前缀）
+// 按文件头判断而不是看扩展名，避免扩展名与真实格式不一致
+function isJpegBuffer(buf) {
+  return buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff
+}
+
+// 统一转成 jpg：本来就是 jpg 的直接用原字节，其余格式用 Electron 内置解码器转码
+function toJpegBuffer(absPath) {
+  const buffer = fs.readFileSync(absPath)
+  if (isJpegBuffer(buffer)) return { buffer, converted: false }
+
+  const image = nativeImage.createFromBuffer(buffer)
+  if (image.isEmpty()) {
+    const ext = path.extname(absPath).toLowerCase() || '未知格式'
+    throw new Error(`图片无法转码为 jpg（${ext}），请改用 jpg 或 png 格式`)
+  }
+  return { buffer: image.toJPEG(JPEG_QUALITY), converted: true }
+}
+
+// 对象键为 <前缀>/<uuid>.jpg，前缀由调用方传入当前工程 ID
 function buildObjectKey(prefix) {
-  const dir = prefix.replace(/^\/+|\/+$/g, '')
+  const dir = String(prefix || '').replace(/[^A-Za-z0-9_-]/g, '')
   const name = `${randomUUID()}.jpg`
   return dir ? `${dir}/${name}` : name
 }
 
 function buildPublicUrl(cfg, key) {
   const encoded = key.split('/').map(encodeURIComponent).join('/')
-  if (cfg.domain) return `${cfg.domain.replace(/\/+$/, '')}/${encoded}`
   return `https://${cfg.bucket}.cos.${cfg.region}.myqcloud.com/${encoded}`
 }
 
 // 上传单个本地图片文件，返回 { key, url }
-export async function uploadImageFile(absPath) {
+export async function uploadImageFile(absPath, prefix) {
   const cfg = readCosConfig()
   assertConfigured(cfg)
 
   if (!fs.existsSync(absPath)) throw new Error('待上传的图片不存在或已被移动')
   const ext = path.extname(absPath).toLowerCase()
-  const contentType = IMAGE_MIME[ext]
-  if (!contentType) throw new Error(`不支持上传的图片格式：${ext || '未知'}`)
+  if (!SUPPORTED_EXT.includes(ext)) throw new Error(`不支持上传的图片格式：${ext || '未知'}`)
+  if (fs.statSync(absPath).size > MAX_UPLOAD_BYTES) throw new Error('单张图片不能超过 20 MB')
 
-  const size = fs.statSync(absPath).size
-  if (size > MAX_UPLOAD_BYTES) throw new Error('单张图片不能超过 20 MB')
-
-  const key = buildObjectKey(cfg.prefix)
+  const { buffer, converted } = toJpegBuffer(absPath)
+  const key = buildObjectKey(prefix)
   try {
     await getClient(cfg).putObject({
       Bucket: cfg.bucket,
       Region: cfg.region,
       Key: key,
-      Body: fs.createReadStream(absPath),
-      ContentLength: size,
-      // 对象名统一为 uuid.jpg，但 ContentType 仍按真实格式声明，避免下游读取时解码失败
-      ContentType: contentType,
+      Body: buffer,
+      ContentType: 'image/jpeg',
     })
   } catch (err) {
     throw toReadableError(err, '图片上传失败')
   }
 
-  return { key, url: buildPublicUrl(cfg, key), size }
+  return { key, url: buildPublicUrl(cfg, key), converted }
 }
 
 // 测试当前配置能否正常访问存储桶

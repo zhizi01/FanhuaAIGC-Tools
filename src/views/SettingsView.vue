@@ -86,8 +86,6 @@ const cosForm = reactive({
   secretKey: savedCos.secretKey || '',
   bucket: savedCos.bucket || '',
   region: savedCos.region || '',
-  prefix: savedCos.prefix || '',
-  domain: savedCos.domain || '',
 })
 const savingCos = ref(false)
 const testingCos = ref(false)
@@ -98,9 +96,7 @@ const cosDirty = computed(() => {
     cosForm.secretId.trim() !== String(saved.secretId || '') ||
     cosForm.secretKey.trim() !== String(saved.secretKey || '') ||
     cosForm.bucket.trim() !== String(saved.bucket || '') ||
-    cosForm.region.trim() !== String(saved.region || '') ||
-    cosForm.prefix.trim() !== String(saved.prefix || '') ||
-    cosForm.domain.trim() !== String(saved.domain || '')
+    cosForm.region.trim() !== String(saved.region || '')
   )
 })
 
@@ -128,8 +124,6 @@ async function saveCosSettings() {
         secretKey: cosForm.secretKey.trim(),
         bucket: cosForm.bucket.trim(),
         region: cosForm.region.trim(),
-        prefix: cosForm.prefix.trim(),
-        domain: cosForm.domain.trim(),
       },
     })
     message.success('COS 配置已保存')
@@ -450,7 +444,7 @@ function formatContext(size) {
       <section class="settings-card">
         <div class="card-title"><Cloud :size="18" /> 腾讯云 COS 对象存储</div>
         <div class="card-desc">
-          视频模型只接受图片链接，参与生成的图片会先上传到 COS 并统一重命名为 uuid.jpg；密钥仅保存在本机。
+          视频模型只接受图片链接，参与生成的图片会先转成 jpg 上传到 COS，按「工程 ID/uuid.jpg」存放；密钥仅保存在本机。
         </div>
 
         <div class="setting-row">
@@ -498,30 +492,6 @@ function formatContext(size) {
             v-model:value="cosForm.region"
             class="cos-form-control"
             placeholder="ap-guangzhou"
-          />
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-label">
-            <div class="label-title">目录前缀（可选）</div>
-            <div class="label-desc">留空则上传到桶根目录</div>
-          </div>
-          <a-input
-            v-model:value="cosForm.prefix"
-            class="cos-form-control"
-            placeholder="ai-man/images"
-          />
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-label">
-            <div class="label-title">自定义访问域名（可选）</div>
-            <div class="label-desc">留空则使用 COS 默认域名</div>
-          </div>
-          <a-input
-            v-model:value="cosForm.domain"
-            class="cos-form-control"
-            placeholder="https://cdn.example.com"
           />
         </div>
 

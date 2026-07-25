@@ -9,7 +9,7 @@ const LS_RECENT = 'qs_recent_projects'
 const DEFAULT_SETTINGS = {
   appearance: { themeMode: 'dark', primaryColor: '#1ec9b0', density: 'comfortable', background: 'grid' },
   imageGeneration: { apiKey: '' },
-  cos: { secretId: '', secretKey: '', bucket: '', region: '', prefix: '', domain: '' },
+  cos: { secretId: '', secretKey: '', bucket: '', region: '' },
   models: [],
 }
 
