@@ -2,8 +2,9 @@
 import { computed, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { message, Modal } from 'ant-design-vue'
-import { ArrowLeft, Plus, Pencil, Trash2, Star, Palette, Cpu, ImagePlus, KeyRound } from 'lucide-vue-next'
+import { ArrowLeft, Plus, Pencil, Trash2, Star, Palette, Cpu, ImagePlus, KeyRound, Cloud } from 'lucide-vue-next'
 import { useAppStore } from '../store/appState.js'
+import { api } from '../services/bridge.js'
 import { genLocalId } from '../utils/id.js'
 
 const router = useRouter()
@@ -75,6 +76,84 @@ async function saveImageGenerationSettings() {
     message.error('保存失败：' + err.message)
   } finally {
     savingImageApiKey.value = false
+  }
+}
+
+// 腾讯云 COS：图片云存，供视频模型通过公网链接读取
+const savedCos = appStore.settings.cos || {}
+const cosForm = reactive({
+  secretId: savedCos.secretId || '',
+  secretKey: savedCos.secretKey || '',
+  bucket: savedCos.bucket || '',
+  region: savedCos.region || '',
+  prefix: savedCos.prefix || '',
+  domain: savedCos.domain || '',
+})
+const savingCos = ref(false)
+const testingCos = ref(false)
+
+const cosDirty = computed(() => {
+  const saved = appStore.settings.cos || {}
+  return (
+    cosForm.secretId.trim() !== String(saved.secretId || '') ||
+    cosForm.secretKey.trim() !== String(saved.secretKey || '') ||
+    cosForm.bucket.trim() !== String(saved.bucket || '') ||
+    cosForm.region.trim() !== String(saved.region || '') ||
+    cosForm.prefix.trim() !== String(saved.prefix || '') ||
+    cosForm.domain.trim() !== String(saved.domain || '')
+  )
+})
+
+function ensureCosRequired() {
+  if (
+    !cosForm.secretId.trim() ||
+    !cosForm.secretKey.trim() ||
+    !cosForm.bucket.trim() ||
+    !cosForm.region.trim()
+  ) {
+    message.warning('请填写完整的 SecretId、SecretKey、存储桶与地域')
+    return false
+  }
+  return true
+}
+
+async function saveCosSettings() {
+  if (!ensureCosRequired()) return
+  savingCos.value = true
+  try {
+    await appStore.saveSettings({
+      ...appStore.settings,
+      cos: {
+        secretId: cosForm.secretId.trim(),
+        secretKey: cosForm.secretKey.trim(),
+        bucket: cosForm.bucket.trim(),
+        region: cosForm.region.trim(),
+        prefix: cosForm.prefix.trim(),
+        domain: cosForm.domain.trim(),
+      },
+    })
+    message.success('COS 配置已保存')
+  } catch (err) {
+    message.error('保存失败：' + err.message)
+  } finally {
+    savingCos.value = false
+  }
+}
+
+async function testCosConnection() {
+  if (!ensureCosRequired()) return
+  if (cosDirty.value) {
+    message.warning('请先保存配置再测试连接')
+    return
+  }
+  testingCos.value = true
+  try {
+    await api.cos.test()
+    message.success('COS 连接正常')
+  } catch (err) {
+    message.error('连接失败：' + err.message)
+  } finally {
+    testingCos.value = false
   }
 }
 
@@ -366,6 +445,100 @@ function formatContext(size) {
           </div>
         </div>
       </section>
+
+      <!-- 腾讯云 COS 对象存储 -->
+      <section class="settings-card">
+        <div class="card-title"><Cloud :size="18" /> 腾讯云 COS 对象存储</div>
+        <div class="card-desc">
+          视频模型只接受图片链接，参与生成的图片会先上传到 COS 并统一重命名为 uuid.jpg；密钥仅保存在本机。
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-label">
+            <div class="label-title">SecretId</div>
+            <div class="label-desc">腾讯云 API 密钥标识</div>
+          </div>
+          <a-input-password
+            v-model:value="cosForm.secretId"
+            class="cos-form-control"
+            placeholder="AKIDxxxxxxxx"
+          />
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-label">
+            <div class="label-title">SecretKey</div>
+            <div class="label-desc">腾讯云 API 密钥，请妥善保管</div>
+          </div>
+          <a-input-password
+            v-model:value="cosForm.secretKey"
+            class="cos-form-control"
+            placeholder="填写腾讯云 SecretKey"
+          />
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-label">
+            <div class="label-title">存储桶名称 Bucket</div>
+            <div class="label-desc">格式为名称-APPID，可在 COS 控制台查看</div>
+          </div>
+          <a-input
+            v-model:value="cosForm.bucket"
+            class="cos-form-control"
+            placeholder="examplebucket-1250000000"
+          />
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-label">
+            <div class="label-title">所属地域 Region</div>
+            <div class="label-desc">存储桶所在地域，可在 COS 控制台查看</div>
+          </div>
+          <a-input
+            v-model:value="cosForm.region"
+            class="cos-form-control"
+            placeholder="ap-guangzhou"
+          />
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-label">
+            <div class="label-title">目录前缀（可选）</div>
+            <div class="label-desc">留空则上传到桶根目录</div>
+          </div>
+          <a-input
+            v-model:value="cosForm.prefix"
+            class="cos-form-control"
+            placeholder="ai-man/images"
+          />
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-label">
+            <div class="label-title">自定义访问域名（可选）</div>
+            <div class="label-desc">留空则使用 COS 默认域名</div>
+          </div>
+          <a-input
+            v-model:value="cosForm.domain"
+            class="cos-form-control"
+            placeholder="https://cdn.example.com"
+          />
+        </div>
+
+        <div class="cos-actions">
+          <a-button
+            type="primary"
+            :loading="savingCos"
+            :disabled="!cosDirty"
+            @click="saveCosSettings"
+          >
+            保存配置
+          </a-button>
+          <a-button :loading="testingCos" @click="testCosConnection">
+            测试连接
+          </a-button>
+        </div>
+      </section>
     </div>
 
     <a-modal
@@ -608,5 +781,16 @@ function formatContext(size) {
 }
 .image-key-control :deep(.ant-input-affix-wrapper) {
   flex: 1;
+}
+
+.cos-form-control {
+  width: min(430px, 56%);
+}
+.cos-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-color);
 }
 </style>

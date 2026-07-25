@@ -14,6 +14,15 @@ const DEFAULTS = {
   imageGeneration: {
     apiKey: '',
   },
+  // 腾讯云 COS 对象存储：参与生成的图片需要以公网链接提交给视频模型
+  cos: {
+    secretId: '',
+    secretKey: '',
+    bucket: '', // 格式 examplebucket-1250000000
+    region: '', // 如 ap-guangzhou
+    prefix: '', // 可选：对象目录前缀
+    domain: '', // 可选：自定义访问域名
+  },
   models: [],
 }
 
@@ -21,6 +30,7 @@ function normalize(data) {
   return {
     appearance: { ...DEFAULTS.appearance, ...(data?.appearance || {}) },
     imageGeneration: { ...DEFAULTS.imageGeneration, ...(data?.imageGeneration || {}) },
+    cos: { ...DEFAULTS.cos, ...(data?.cos || {}) },
     models: Array.isArray(data?.models) ? data.models : [],
   }
 }

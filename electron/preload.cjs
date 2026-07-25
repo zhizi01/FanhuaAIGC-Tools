@@ -53,6 +53,13 @@ contextBridge.exposeInMainWorld('api', {
     read: (projectPath) => ipcRenderer.invoke('flow:read', projectPath),
     save: (payload) => ipcRenderer.invoke('flow:save', payload),
   },
+  // 腾讯云 COS 对象存储
+  cos: {
+    status: () => ipcRenderer.invoke('cos:status'),
+    test: () => ipcRenderer.invoke('cos:test'),
+    uploadImage: (payload) => ipcRenderer.invoke('cos:uploadImage', payload),
+    uploadImages: (payload) => ipcRenderer.invoke('cos:uploadImages', payload),
+  },
   // 系统对话框
   dialog: {
     selectProjectDir: () => ipcRenderer.invoke('dialog:selectProjectDir'),

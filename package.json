@@ -22,6 +22,7 @@
     "@vue-flow/node-resizer": "^1.5.1",
     "ant-design-vue": "^4.2.6",
     "axios": "^1.18.1",
+    "cos-nodejs-sdk-v5": "^3.0.0",
     "lucide-vue-next": "^1.0.0",
     "mammoth": "^1.12.0",
     "marked": "^18.0.5",

@@ -9,6 +9,7 @@ const LS_RECENT = 'qs_recent_projects'
 const DEFAULT_SETTINGS = {
   appearance: { themeMode: 'dark', primaryColor: '#1ec9b0', density: 'comfortable', background: 'grid' },
   imageGeneration: { apiKey: '' },
+  cos: { secretId: '', secretKey: '', bucket: '', region: '', prefix: '', domain: '' },
   models: [],
 }
 
@@ -34,6 +35,14 @@ const desktopOnly = (name) => () => {
 function toPlain(value) {
   if (value == null || typeof value !== 'object') return value
   return JSON.parse(JSON.stringify(value))
+}
+
+// Electron 会给 IPC 异常加上「Error invoking remote method 'x': Error: 」前缀，去掉后才好直接提示用户
+function unwrapIpcError(promise) {
+  return promise.catch((err) => {
+    const msg = String(err?.message || '').replace(/^Error invoking remote method '[^']*':\s*(Error:\s*)?/, '')
+    throw new Error(msg || 'COS 操作失败')
+  })
 }
 
 // 包一层：把对象类型的入参在进入 IPC 前转为纯对象
@@ -83,6 +92,12 @@ function wrapElectronApi(raw) {
     flow: {
       read: (projectPath) => raw.flow.read(projectPath),
       save: (payload) => raw.flow.save(toPlain(payload)),
+    },
+    cos: {
+      status: () => raw.cos.status(),
+      test: () => unwrapIpcError(raw.cos.test()),
+      uploadImage: (payload) => unwrapIpcError(raw.cos.uploadImage(toPlain(payload))),
+      uploadImages: (payload) => unwrapIpcError(raw.cos.uploadImages(toPlain(payload))),
     },
     dialog: {
       selectProjectDir: () => raw.dialog.selectProjectDir(),
@@ -170,6 +185,12 @@ const fallbackApi = {
       lsSet('qs_flow_' + projectPath, data)
       return data
     },
+  },
+  cos: {
+    status: async () => ({ configured: false }),
+    test: desktopOnly('测试 COS 连接'),
+    uploadImage: desktopOnly('上传图片到 COS'),
+    uploadImages: desktopOnly('上传图片到 COS'),
   },
   dialog: {
     selectProjectDir: desktopOnly('选择工程目录'),
