@@ -358,7 +358,6 @@ function formatContext(size) {
             添加模型
           </a-button>
         </div>
-        <div class="card-desc">全部使用 OpenAI 兼容规范，AI 能力将从这里选择模型。</div>
 
         <div v-if="models.length" class="model-list">
           <div v-for="m in models" :key="m.id" class="model-item">
@@ -404,7 +403,6 @@ function formatContext(size) {
           <ImagePlus :size="18" /> 图片生成模型
           <a-tag color="cyan">固定模型</a-tag>
         </div>
-        <div class="card-desc">角色参考图使用火山方舟 Seedream 5.0 串行生成，生成结果会自动下载到当前工程。</div>
 
         <div class="image-model-summary">
           <div>
@@ -443,9 +441,6 @@ function formatContext(size) {
       <!-- 腾讯云 COS 对象存储 -->
       <section class="settings-card">
         <div class="card-title"><Cloud :size="18" /> 腾讯云 COS 对象存储</div>
-        <div class="card-desc">
-          视频模型只接受图片链接，参与生成的图片会先转成 jpg 上传到 COS，按「工程 ID/uuid.jpg」存放；密钥仅保存在本机。
-        </div>
 
         <div class="setting-row">
           <div class="setting-label">
@@ -612,12 +607,6 @@ function formatContext(size) {
 .add-model-btn {
   margin-left: auto;
 }
-.card-desc {
-  font-size: 13px;
-  color: var(--text-tertiary);
-  margin-bottom: 16px;
-}
-
 .setting-row {
   display: flex;
   align-items: center;
