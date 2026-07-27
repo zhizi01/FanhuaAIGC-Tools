@@ -157,5 +157,23 @@ export const useCanvasTaskStore = defineStore('canvasTask', {
         this._set(nodeId, { status: 'error', error: err?.message || String(err) })
       }
     },
+
+    // ---------- 分镜节点：AI 生成视频（火山方舟 Seedance，主进程内轮询至完成） ----------
+    startVideo({ projectPath, nodeId, prompt, referenceImages, duration }) {
+      if (this.tasks[nodeId]?.status === 'running') return
+      this._set(nodeId, { kind: 'video', status: 'running', error: '', projectPath })
+      this._runVideo({ projectPath, nodeId, prompt, referenceImages, duration })
+    },
+    async _runVideo({ projectPath, nodeId, prompt, referenceImages, duration }) {
+      try {
+        const { asset, usage } = await api.video.generateShot({ projectPath, prompt, referenceImages, duration })
+        await useUsageStore().add(projectPath, usage)
+        const ok = useFlowCanvasStore().applyVideoResult({ projectPath, nodeId, asset })
+        if (!ok) throw new Error('分镜节点已不在画布上，视频已保存到资产库')
+        this._clear(nodeId)
+      } catch (err) {
+        this._set(nodeId, { status: 'error', error: err?.message || String(err) })
+      }
+    },
   },
 })

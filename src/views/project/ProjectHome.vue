@@ -74,6 +74,9 @@ const scriptDrafts = reactive({})
 const roleOptions = ref([])
 const imageOptions = ref([])
 const mentionOptions = computed(() => [...roleOptions.value, ...imageOptions.value])
+// @ 提及的原始数据（角色/图片资产），用于把提及解析为参与视频生成的参考图
+const roleSources = ref([])
+const imageSources = ref([])
 
 const contextMenu = reactive({
   visible: false,
@@ -990,23 +993,47 @@ async function loadMentionSources() {
   if (!projectPath) {
     roleOptions.value = []
     imageOptions.value = []
+    roleSources.value = []
+    imageSources.value = []
     return
   }
   try {
     const roles = (await api.roles.list(projectPath)).filter(isCharacterRoleCandidate)
+    roleSources.value = roles
     roleOptions.value = roles.map((r) => ({ value: r.name, label: r.name })).filter((o) => o.value)
   } catch {
     roleOptions.value = []
+    roleSources.value = []
   }
   try {
     const assets = await api.assets.list(projectPath)
-    imageOptions.value = assets
-      .filter((a) => a.type === 'image')
-      .map((a) => ({ value: a.name, label: a.name }))
-      .filter((o) => o.value)
+    const images = assets.filter((a) => a.type === 'image')
+    imageSources.value = images
+    imageOptions.value = images.map((a) => ({ value: a.name, label: a.name })).filter((o) => o.value)
   } catch {
     imageOptions.value = []
+    imageSources.value = []
   }
+}
+
+// 解析提示词中 @ 提及的角色 / 参考图，收集参与视频生成的图片（工程内相对路径）
+// 角色取封面图，参考图取资产文件；去重后交给主进程上传 COS
+function collectMentionedImages(prompt) {
+  const text = String(prompt || '')
+  if (!text) return []
+  const files = []
+  for (const role of roleSources.value) {
+    if (role.name && text.includes(`@${role.name}`)) {
+      const cover = role.cover || role.images?.[0]
+      if (cover) files.push(cover)
+    }
+  }
+  for (const asset of imageSources.value) {
+    if (asset.name && text.includes(`@${asset.name}`) && asset.file) {
+      files.push(asset.file)
+    }
+  }
+  return [...new Set(files)]
 }
 
 async function loadScriptChoices() {
@@ -1276,8 +1303,25 @@ function updateShotPrompt(id, value) {
   )
 }
 
-function generateShotVideo() {
-  message.info('视频生成能力开发中（已预留接口）')
+// 分镜节点：AI 生成视频（火山方舟 Seedance，后台任务，完成后自动写入节点与资产库）
+// 图片默认不参与（模型智能模式）；@ 提及的角色/参考图会上传 COS 后作为参考图传入
+function generateShotVideo(id, data) {
+  const projectPath = project.value?.path
+  if (!projectPath) return
+  if (canvasTasks.isRunning(id)) return
+  const prompt = String(data?.prompt || '').trim()
+  if (!prompt) return message.warning('请先填写分镜提示词')
+  canvasTasks.startVideo({
+    projectPath,
+    nodeId: id,
+    prompt,
+    referenceImages: collectMentionedImages(prompt),
+    duration: data?.duration,
+  })
+}
+
+function generateMasterVideo() {
+  message.info('总视频合成能力开发中（已预留接口）')
 }
 
 // 当前分镜总览已关联的分镜记录（含 AI 生成与手动接入）
@@ -1890,9 +1934,17 @@ onBeforeUnmount(() => {
                 @change="(val) => updateShotPrompt(id, val)"
               />
             </div>
-            <button class="shot-video-btn nodrag" @mousedown.stop @click.stop="generateShotVideo(id, data)">
-              <Video :size="13" /> 生成视频
+            <button
+              class="shot-video-btn nodrag"
+              :disabled="canvasTasks.isRunning(id)"
+              @mousedown.stop
+              @click.stop="generateShotVideo(id, data)"
+            >
+              <Video :size="13" /> {{ canvasTasks.isRunning(id) ? '视频生成中…' : data.video ? '重新生成视频' : '生成视频' }}
             </button>
+            <div v-if="canvasTasks.errorOf(id)" class="shot-video-error nodrag" @mousedown.stop>
+              {{ canvasTasks.errorOf(id) }}
+            </div>
           </div>
         </template>
 
@@ -1919,7 +1971,7 @@ onBeforeUnmount(() => {
                 <span>总视频未生成</span>
               </div>
             </div>
-            <button class="master-video-btn nodrag" @mousedown.stop @click.stop="generateShotVideo(id, data)">
+            <button class="master-video-btn nodrag" @mousedown.stop @click.stop="generateMasterVideo()">
               <Video :size="14" /> 生成总视频
             </button>
           </div>
@@ -2875,6 +2927,21 @@ onBeforeUnmount(() => {
 .shot-video-btn:hover {
   color: #fff;
   background: rgba(167, 139, 250, 0.32);
+}
+.shot-video-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+.shot-video-btn:disabled:hover {
+  color: #ddd6fe;
+  background: rgba(167, 139, 250, 0.14);
+}
+.shot-video-error {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #ff7875;
+  word-break: break-word;
 }
 .master-output-card {
   min-height: 260px;

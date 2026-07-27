@@ -242,5 +242,28 @@ export const useFlowCanvasStore = defineStore('flowCanvas', {
       this.rev += 1
       return true
     },
+
+    // AI 生成视频结果：把视频文件挂到分镜节点上（保留 image 作为封面）
+    applyVideoResult({ projectPath, nodeId, asset }) {
+      if (this.projectPath !== projectPath) return false
+      const node = this.nodes.find((n) => n.id === nodeId)
+      if (!node || !asset) return false
+      this.nodes = this.nodes.map((n) =>
+        n.id === nodeId
+          ? {
+              ...n,
+              data: {
+                ...n.data,
+                video: asset.file || '',
+                videoAssetId: asset.id || '',
+                generating: false,
+              },
+            }
+          : n,
+      )
+      this.dirty = true
+      this.rev += 1
+      return true
+    },
   },
 })

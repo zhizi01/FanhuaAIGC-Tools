@@ -38,10 +38,10 @@ function toPlain(value) {
 }
 
 // Electron 会给 IPC 异常加上「Error invoking remote method 'x': Error: 」前缀，去掉后才好直接提示用户
-function unwrapIpcError(promise) {
+function unwrapIpcError(promise, label = 'COS 操作') {
   return promise.catch((err) => {
     const msg = String(err?.message || '').replace(/^Error invoking remote method '[^']*':\s*(Error:\s*)?/, '')
-    throw new Error(msg || 'COS 操作失败')
+    throw new Error(msg || `${label}失败`)
   })
 }
 
@@ -98,6 +98,9 @@ function wrapElectronApi(raw) {
       test: () => unwrapIpcError(raw.cos.test()),
       uploadImage: (payload) => unwrapIpcError(raw.cos.uploadImage(toPlain(payload))),
       uploadImages: (payload) => unwrapIpcError(raw.cos.uploadImages(toPlain(payload))),
+    },
+    video: {
+      generateShot: (payload) => unwrapIpcError(raw.video.generateShot(toPlain(payload)), '视频生成'),
     },
     dialog: {
       selectProjectDir: () => raw.dialog.selectProjectDir(),
@@ -191,6 +194,9 @@ const fallbackApi = {
     test: desktopOnly('测试 COS 连接'),
     uploadImage: desktopOnly('上传图片到 COS'),
     uploadImages: desktopOnly('上传图片到 COS'),
+  },
+  video: {
+    generateShot: desktopOnly('生成视频'),
   },
   dialog: {
     selectProjectDir: desktopOnly('选择工程目录'),

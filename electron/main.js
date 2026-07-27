@@ -10,6 +10,7 @@ import { registerRolesIpc } from './ipc/roles.js'
 import { registerAssetsIpc } from './ipc/assets.js'
 import { registerFlowsIpc } from './ipc/flows.js'
 import { registerCosIpc } from './ipc/cos.js'
+import { registerVideoIpc } from './ipc/video.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -77,6 +78,7 @@ function registerIpc() {
   registerAssetsIpc()
   registerFlowsIpc()
   registerCosIpc()
+  registerVideoIpc()
 }
 
 app.whenReady().then(() => {

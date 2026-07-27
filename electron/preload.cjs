@@ -60,6 +60,10 @@ contextBridge.exposeInMainWorld('api', {
     uploadImage: (payload) => ipcRenderer.invoke('cos:uploadImage', payload),
     uploadImages: (payload) => ipcRenderer.invoke('cos:uploadImages', payload),
   },
+  // 视频生成（火山方舟 Seedance）
+  video: {
+    generateShot: (payload) => ipcRenderer.invoke('video:generateShot', payload),
+  },
   // 系统对话框
   dialog: {
     selectProjectDir: () => ipcRenderer.invoke('dialog:selectProjectDir'),
